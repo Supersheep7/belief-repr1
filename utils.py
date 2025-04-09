@@ -52,20 +52,22 @@ class LogitAttribution:
                 answers: list = ["True", "False"]
     ) -> None:
         
+        # Tokenize answers, tokenize prompts, get cache on a fwd pass
         answer_tokens = torch.tensor(answers).to(self.device)
         tokens = self.model.to_tokens(prompts, prepend_bos=True)
-        original_logits, cache = self.model.run_with_cache(tokens)
-        answer_residual_directions = self.model.tokens_to_residual_directions(answer_tokens)
+        _, cache = self.model.run_with_cache(tokens)
 
+        # Get logit difference directions
+        answer_residual_directions = self.model.tokens_to_residual_directions(answer_tokens)
         logit_diff_directions = (answer_residual_directions[:, 0] - answer_residual_directions[:, 1])
+        
+        # Get cumulative difference
         accumulated_residual, labels = cache.accumulated_resid(layer=-1, incl_mid=True, pos_slice=-1, return_labels=True)
         self.logit_lens_logit_diffs = self.residual_stack_to_logit_diff(accumulated_residual, cache, logit_diff_directions, prompts)
 
-        
+        # Get per layer difference
         per_layer_residual, labels = cache.decompose_resid(layer=-1, pos_slice=-1, return_labels=True)
-        self.per_layer_logit_diffs = self.residual_stack_to_logit_diff(
-            per_layer_residual, cache, logit_diff_directions, prompts
-        )
+        self.per_layer_logit_diffs = self.residual_stack_to_logit_diff(per_layer_residual, cache, logit_diff_directions, prompts)
 
         return 
     
