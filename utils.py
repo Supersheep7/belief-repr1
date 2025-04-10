@@ -139,6 +139,12 @@ class PatchingMetrics():
         self.corrupted_logits = None
         self.answers = answers
 
+    def get_logits(self):
+        if self.clean_logits is None or self.corrupted_logits is None:
+            raise ValueError("Logits not found. Please call the `run` method first.")
+        print("Returned metrics cache: clean logits, corrupted logits")
+        return self.clean_logits, self.corrupted_logits
+
     def logits_to_ave_logit_diff(self,
                                 logits: Float[torch.Tensor, "batch seq d_vocab"],
                                 answer_tokens: Float[torch.Tensor, "batch 2"],
@@ -161,6 +167,7 @@ class PatchingMetrics():
         return
     
     def reset(self) -> None:
+        print("Resetting logits")
         self.clean_logits = None
         self.corrupted_logits = None
         return
@@ -171,7 +178,6 @@ class PatchingMetrics():
 
         if self.clean_logits is None or self.corrupted_logits is None:
             raise ValueError("Logits not found. Please call the `run` method first.")
-
 
         patched_logit_diff = self.logits_to_ave_logit_diff(logits, self.answers)
         clean_logit_diff = self.logits_to_ave_logit_diff(self.clean_logits, self.answers)
