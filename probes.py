@@ -20,6 +20,7 @@ import torch.nn as nn
 from torch.optim import Adam
 from torch.utils.data import DataLoader, TensorDataset
 import pickle
+import transformer_lens as tlens
 
 '''
 Here we have the three probes that we will deploy to test for internal representation of belief
@@ -32,8 +33,9 @@ random.seed(42)
 
 class LogReg():
 
-    def __init__(self):
-        self.layers = [x for x in range(layers)]
+    def __init__(self, model: tlens.HookedTransformer):
+        self.model = model
+        self.layers = [x for x in range(model.cfg.layers)]
         self.data = None
         self.gold = None
         self.probe = LogisticRegression()
@@ -158,7 +160,7 @@ class MLPProbe(nn.Module):
         self.linear2 = nn.Linear(100, 1)
 
     def forward(self, x):
-        h = F.relu(self.linear1(x))
+        h = torch.relu(self.linear1(x))
         o = self.linear2(h)
         return torch.sigmoid(o)
 
