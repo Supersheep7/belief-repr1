@@ -12,6 +12,7 @@ from transformer_lens.hook_points import (
 )
 from transformer_lens import HookedTransformer, ActivationCache
 from jaxtyping import Float
+from typing import Callable
 import numpy as np 
 
 
@@ -38,7 +39,12 @@ class LogitAttribution:
             logit_diff_directions,
         ) / len(prompts)
 
-    def plot_logit_diffs(self, data, x=None, hover_name=None, title=None):
+    def plot_logit_diffs(self, 
+                         data, 
+                         x=None, 
+                         hover_name=None, 
+                         title=None
+    ) -> None:
         
         if isinstance(data, torch.Tensor):
             data = data.detach().cpu().numpy() 
@@ -102,3 +108,93 @@ class LogitAttribution:
               self.per_layer_labels)
 
         return self.logit_lens_logit_diffs, self.logit_lens_labels, self.per_layer_logit_diffs, self.logit_lens_logit_diffs
+
+class PatchingMetrics():
+
+    '''
+    Takes: model type, logits, clean and corrupted input, torch.device
+    Returns: None
+    Usecase: Initialize PatchingMetrics object with your parameter, then call the relevant metric and pass it to patching
+    E.g. 
+    mymetric = PatchingMetrics(gpt2, logits, prompt, corrupted_prompt, cuda)
+    ... call patching from transformer lens ...
+    act_patch_resid_pre = patching.get_act_patch_resid_pre(
+    **args, patching_metric=mymetric
+    )
+    '''
+
+    def __init__(self, 
+                 model: HookedTransformer,
+                 clean: Float[torch.Tensor, "batch seq"], 
+                 corrupted: Float[torch.Tensor, "batch seq"], 
+                 answers: Float[torch.Tensor, "batch 2"],
+                 device: torch.device = None
+    ) -> None:
+        
+        self.model: HookedTransformer = model
+        self.device = device
+        self.clean = clean
+        self.corrupted = corrupted
+        self.clean_logits = None 
+        self.corrupted_logits = None
+        self.answers = answers
+
+    def logits_to_ave_logit_diff(self,
+                                logits: Float[torch.Tensor, "batch seq d_vocab"],
+                                answer_tokens: Float[torch.Tensor, "batch 2"],
+                                per_prompt: bool = False,
+    ) -> Float[torch.Tensor, "*batch"]:
+        """
+        Returns logit difference between the correct and incorrect answer.
+
+        If per_prompt=True, return the array of differences rather than the average.
+        """
+        final_logits: Float[torch.Tensor, "batch d_vocab"] = logits[:, -1, :]
+        answer_logits: Float[torch.Tensor, "batch 2"] = final_logits.gather(dim=-1, index=answer_tokens)
+        correct_logits, incorrect_logits = answer_logits.unbind(dim=-1)
+        answer_logit_diff = correct_logits - incorrect_logits
+        return answer_logit_diff if per_prompt else answer_logit_diff.mean()
+
+    def run(self) -> None:
+        self.clean_logits, _ = self.model.run_with_cache(self.clean)
+        self.corrupted_logits, _ = self.model.run_with_cache(self.corrupted)
+        return
+    
+    def reset(self) -> None:
+        self.clean_logits = None
+        self.corrupted_logits = None
+        return
+
+    def logit_diff(self,
+                   logits: Float[torch.Tensor, "batch seq d_vocab"]
+    ) -> Float[torch.Tensor, ""]:
+
+        if self.clean_logits is None or self.corrupted_logits is None:
+            raise ValueError("Logits not found. Please call the `run` method first.")
+
+
+        patched_logit_diff = self.logits_to_ave_logit_diff(logits, self.answers)
+        clean_logit_diff = self.logits_to_ave_logit_diff(self.clean_logits, self.answers)
+        corrupted_logit_diff = self.logits_to_ave_logit_diff(self.corrupted_logits, self.answers)
+
+        return (patched_logit_diff - corrupted_logit_diff) / (clean_logit_diff - corrupted_logit_diff)
+  
+    def logit_diff_variation(self,
+                     logits: Float[torch.Tensor, "batch seq d_vocab"]
+    ) -> Float[torch.Tensor, ""]:
+        
+        if self.clean_logits is None or self.corrupted_logits is None:
+            raise ValueError("Logits not found. Please call the `run` method first.")
+
+        patched_logit_diff = self.logits_to_ave_logit_diff(logits, self.answers)
+        clean_logit_diff = self.logits_to_ave_logit_diff(self.clean_logits, self.answers)
+        corrupted_logit_diff = self.logits_to_ave_logit_diff(self.corrupted_logits, self.answers)
+
+        return (patched_logit_diff - clean_logit_diff) / (clean_logit_diff - corrupted_logit_diff)
+
+        
+        
+
+
+
+# Float[Tensor, ""] This is the returntype of functions here
