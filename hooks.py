@@ -37,11 +37,17 @@ def patching_hook(
     return resid_pre
 
 def steering_hook(
-    resid_pre: Float[torch.Tensor, "batch pos d_model"],
+    activations: Float[Tensor, "batch pos d_in"],
     hook: HookPoint,
-    position: int,
-    steer: None
-) -> Float[torch.Tensor, "batch pos d_model"]:
-    
-    # Fill
-    return
+    sae: SAE,
+    latent_idx: int,
+    steering_coefficient: float,
+) -> Tensor:
+    """
+    Steers the model by returning a modified activations tensor, with some multiple of the steering vector added to all
+    sequence positions.
+    """
+
+    # This is for a SAE. Develop this for a direct probe
+
+    return activations + steering_coefficient * sae.W_dec[latent_idx]
