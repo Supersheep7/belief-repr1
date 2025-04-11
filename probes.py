@@ -109,6 +109,8 @@ class Saplma(nn.Module):
         probs = self.sigmoid(logits)
         preds = (probs >= self.threshold).float()
 
+        return probs
+
 ''' The following code is adapted from https://github.com/collin-burns/discovering_latent_knowledge/blob/main/CCS.ipynb by Burns et al. 2022 '''
 
 class MLPProbe(nn.Module):
@@ -131,7 +133,7 @@ class Probe(object):
                  lr: Float = 1e-3, 
                  batch_size: Int =-1,
                  verbose: bool = False, 
-                 device: torch.device = "cuda", 
+                 device: torch.device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu"), 
                  probe_type: str = "linear", 
                  weight_decay: Float = 0.01, 
                  var_normalize: bool = False
@@ -201,8 +203,8 @@ class Probe(object):
 
 class SupervisedProbe(Probe):
 
-    def __init__(self, x, gold):
-        super().__init__()
+    def __init__(self, x, input_dim, gold, **kwargs):
+        super().__init__(input_dim=input_dim, **kwargs)
         self.x = self.normalize(x)
         self.gold = gold
         self.d = self.x.shape[-1]
@@ -216,11 +218,11 @@ class SupervisedProbe(Probe):
         return x
     
     def get_loss(self, 
-                 X_train: Float[torch.Tensor, "batch"], 
-                 y_train: Int[torch.Tensor, "batch"]
+                 p: Float[torch.Tensor, "batch"], 
+                 gold: Int[torch.Tensor, "batch"]
     ) -> Float[torch.Tensor, "batch"]:
         
-        return torch.binary_cross_entropy_with_logits(X_train, y_train)
+        return torch.binary_cross_entropy_with_logits(p, gold)
 
     def get_acc(self, 
                 X_valid: Float[torch.Tensor, "batch"], 
@@ -229,7 +231,7 @@ class SupervisedProbe(Probe):
         
         X_valid = torch.tensor(self.normalize(X_valid), dtype=torch.float, requires_grad=False, device=self.device)
 
-        with torch.no_grad:
+        with torch.no_grad():
             probs = self.best_probe(X_valid)
         predictions = (probs.detach().cpu().numpy() >= 0.5).astype(int)[:, 0]
         acc = (predictions == y_valid.cpu().numpy()).mean()
@@ -270,8 +272,8 @@ class SupervisedProbe(Probe):
 
 class UnsupervisedProbe(Probe):
 
-    def __init__(self, x0, x1):
-        super().__init__()
+    def __init__(self, x0, x1, input_dim, **kwargs):
+        super().__init__(input_dim=input_dim, **kwargs)
         self.x0 = self.normalize(x0)
         self.x1 = self.normalize(x1)
         self.d = self.x0.shape[-1]
