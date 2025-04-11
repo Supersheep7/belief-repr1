@@ -1,93 +1,70 @@
-
-'''
-
-= = = WORK IN PROGRESS = = = 
-
-TO DO: My probes should have the same class structure as CCS!
-
-'''
-
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.model_selection import KFold, cross_val_score
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-import random
 import copy
 import torch as torch
 import torch.nn as nn
 from torch.optim import Adam
 from torch.utils.data import DataLoader, TensorDataset
+from jaxtyping import Float, Int
 import pickle
 import transformer_lens as tlens
 
 '''
 Here we have the three probes that we will deploy to test for internal representation of belief
 Logreg is a simple logistic regressor
-MMP is a mass-mean probes as described in Marks & Tegmark 2023
+MMP is a mass-mean probe as described in Marks & Tegmark 2023
 Neural is a tentative copy of SAPLMA as described in Azaria & Mitchell 2023
 '''
 
-random.seed(42)
+''' Following class adapted from https://github.com/saprmarks/geometry-of-truth/blob/main/probes.py '''
 
-class LogReg():
+class MMP(nn.Module):
 
-    def __init__(self, model: tlens.HookedTransformer):
-        self.model = model
-        self.layers = [x for x in range(model.cfg.layers)]
-        self.data = None
-        self.gold = None
-        self.probe = LogisticRegression()
+    def __init__(self,
+                covariance=None, 
+                inv=None, 
+                acts=None, 
+                labels=None, 
+                atol=1e-3
+    ) -> None:
 
-    def fit(data, gold, self):
-        self.probe.fit(data, gold)
+        super().__init__()
 
-    def cross_validation(self, X, y, cv=5, scoring='accuracy'):             # To test
-        kf = KFold(n_splits=cv, shuffle=True, random_state=42)
-        scores = cross_val_score(self.fit(), X, y, cv=kf, scoring=scoring)
-        return scores
+        if acts is not None and labels is not None:
+            # Compute direction from data if provided
+            pos_acts, neg_acts = acts[labels == 1], acts[labels == 0]
+            pos_mean, neg_mean = pos_acts.mean(0), neg_acts.mean(0)
+            self.direction = nn.Parameter(pos_mean - neg_mean, requires_grad=False)
+            
+            # Compute covariance
+            centered_data = torch.cat([pos_acts - pos_mean, neg_acts - neg_mean], 0)
+            covariance = centered_data.t() @ centered_data / acts.shape[0]
+        else:
+            # Otherwise, you can initialize direction however you want or leave it as None
+            self.direction = nn.Parameter(torch.zeros(acts.shape[1]), requires_grad=False)
 
-    def predict(data, self):
-        self.probe.predict(data)
+        if inv is None:
+            self.inv = nn.Parameter(torch.linalg.pinv(covariance, hermitian=True, atol=atol), requires_grad=False)
+        else:
+            self.inv = nn.Parameter(inv, requires_grad=False)
 
-    def save(llm, layer, self):
-        with open(f'logreg_{llm}_{layer}.pkl', 'wb') as file:
-            pickle.dump(self, file)
+    def forward(self, x, iid=False):
+        if iid:
+            return torch.nn.Sigmoid()(x @ self.inv @ self.direction)
+        else:
+            return torch.nn.Sigmoid()(x @ self.direction)
 
-class Mmp():
+    def pred(self, x, iid=False):
+        return self(x, iid=iid).round()
 
-    def __init__(self, layers):
-        self.layers = [x for x in range(layers)]
-        self.data = None
-        self.gold = None
-        self.probe = LogisticRegression()
-        self.lda = LDA(n_components=2)
-
-    def cross_validation(self, X, y, cv=5, scoring='accuracy'):             # To test
-        kf = KFold(n_splits=cv, shuffle=True, random_state=42)
-        scores = cross_val_score(self.fit(), X, y, cv=kf, scoring=scoring)
-        return scores
-
-    def fit(data, gold, self):
-        data = self.lda.fit_transform(data, gold)
-        self.probe.fit(data, gold)
-
-    def predict(data, self):
-        data = self.lda.transform(data)
-        self.probe.predict(data)
-
-    def save(llm, layer, self):
-        with open(f'mmp_{llm}_{layer}.pkl', 'wb') as file:
-            pickle.dump(self.probe, file)
-
-class Neural(nn.Module):
-
-    # Init
+class Saplma(nn.Module):
 
     def __init__(self, input_dim, hidden_dim=256, hidden_dim2=128, hidden_dim3=64, output_dim=1, threshold=0.5):
-        super(Neural, self).__init__()
-
+        super().__init__()
         # Architecture
         self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()
@@ -101,7 +78,6 @@ class Neural(nn.Module):
         # Hyperparameters
 
         self._initialize_weights()
-        self.device = ("cuda" if torch.cuda.is_available() else "cpu")
         self.optimizer = Adam()
         self.threshold = threshold
         self.best = None
@@ -120,15 +96,7 @@ class Neural(nn.Module):
         nn.init.xavier_uniform_(self.fc4.weight)
         nn.init.zeros_(self.fc4.bias)
 
-    # The following two functions will be useful to pickle the probes with meaningful filenames
-
-    def set_layers(new_layers, self):
-        self.layers = new_layers
-
-    def set_llm(new_llm, self):
-        self.llm = new_llm
-
-    def forward(self, data, train=False):
+    def forward(self, data):
 
         stream = nn.Flatten()(data) # Data should be passed through dataloader
         out = self.fc1(stream)
@@ -141,17 +109,7 @@ class Neural(nn.Module):
         probs = self.sigmoid(logits)
         preds = (probs >= self.threshold).float()
 
-        if train:
-            return probs    # We want to calculate loss
-        else:
-            return preds
-
-    def save(self, llm, layer):
-        with open(f'neural_{llm}_{layer}.pkl', 'wb') as file:
-            pickle.dump(self, file)
-
-''' The following code is from https://github.com/collin-burns/discovering_latent_knowledge/blob/main/CCS.ipynb by Burns et al. 2022 '''
-
+''' The following code is adapted from https://github.com/collin-burns/discovering_latent_knowledge/blob/main/CCS.ipynb by Burns et al. 2022 '''
 
 class MLPProbe(nn.Module):
     def __init__(self, d):
@@ -164,14 +122,23 @@ class MLPProbe(nn.Module):
         o = self.linear2(h)
         return torch.sigmoid(o)
 
-class CCS(object):
-    def __init__(self, x0, x1, nepochs=1000, ntries=10, lr=1e-3, batch_size=-1,
-                 verbose=False, device="cuda", linear=True, weight_decay=0.01, var_normalize=False):
+class Probe(object):
+
+    def __init__(self, 
+                 input_dim,
+                 nepochs: Int = 1000, 
+                 ntries: Int = 10, 
+                 lr: Float = 1e-3, 
+                 batch_size: Int =-1,
+                 verbose: bool = False, 
+                 device: torch.device = "cuda", 
+                 probe_type: str = "linear", 
+                 weight_decay: Float = 0.01, 
+                 var_normalize: bool = False
+                 ):
         # data
         self.var_normalize = var_normalize
-        self.x0 = self.normalize(x0)
-        self.x1 = self.normalize(x1)
-        self.d = self.x0.shape[-1]
+        self.input_dim =  input_dim
 
         # training
         self.nepochs = nepochs
@@ -183,16 +150,21 @@ class CCS(object):
         self.weight_decay = weight_decay
 
         # probe
-        self.linear = linear
+        self.probe_type = probe_type 
         self.initialize_probe()
         self.best_probe = copy.deepcopy(self.probe)
 
-
     def initialize_probe(self):
-        if self.linear:
-            self.probe = nn.Sequential(nn.Linear(self.d, 1), nn.Sigmoid())
-        else:
-            self.probe = MLPProbe(self.d)
+        if self.probe_type == "linear":
+            self.probe = nn.Sequential(nn.Linear(self.input_dim, 1), nn.Sigmoid())
+        elif self.probe_type == "mmp" and self.supervision_type == "S":
+            self.probe = MMP(self.input_dim, self.x, self.gold)                                # Initialize MMP with Labels
+        elif self.probe_type == "mmp" and self.supervision_type == "U":
+            self.probe = MMP(self.input_dim, self.x0, self.x1)                                # Initialize MMP with Contrast Pairs
+        elif self.probe_type == "simple_mlp":
+            self.probe = MLPProbe(self.input_dim)
+        elif self.probe_type == "saplma":
+            self.probe = Saplma(self.input_dim)
         self.probe.to(self.device)
 
     def normalize(self, x):
@@ -206,6 +178,105 @@ class CCS(object):
 
         return normalized_x
 
+    def repeated_train(self):
+        best_loss = np.inf
+        for train_num in range(self.ntries):
+            self.initialize_probe()
+            loss = self.train()
+            if loss < best_loss:
+                self.best_probe = copy.deepcopy(self.probe)
+                best_loss = loss
+
+        return best_loss
+    
+    def save_best_probe(self, 
+                        filename: str
+    ) -> None:
+        """
+        Save the best trained probe to a pickle file.
+        """
+        with open(filename, 'wb') as f:
+            pickle.dump(self.best_probe, f)
+        print(f"Best probe saved to {filename}")
+
+class SupervisedProbe(Probe):
+
+    def __init__(self, x, gold):
+        super().__init__()
+        self.x = self.normalize(x)
+        self.gold = gold
+        self.d = self.x.shape[-1]
+        self.supervision_type = "S"
+
+    def get_tensor_data(self, x):
+        """
+        Returns x0, x1 as appropriate tensors (rather than np arrays)
+        """
+        x = torch.tensor(x, dtype=torch.float, requires_grad=False, device=self.device)
+        return x
+    
+    def get_loss(self, 
+                 X_train: Float[torch.Tensor, "batch"], 
+                 y_train: Int[torch.Tensor, "batch"]
+    ) -> Float[torch.Tensor, "batch"]:
+        
+        return torch.binary_cross_entropy_with_logits(X_train, y_train)
+
+    def get_acc(self, 
+                X_valid: Float[torch.Tensor, "batch"], 
+                y_valid: Float[torch.Tensor, "batch"]
+    ) -> Float[torch.Tensor, "batch"]:
+        
+        X_valid = torch.tensor(self.normalize(X_valid), dtype=torch.float, requires_grad=False, device=self.device)
+
+        with torch.no_grad:
+            probs = self.best_probe(X_valid)
+        predictions = (probs.detach().cpu().numpy() >= 0.5).astype(int)[:, 0]
+        acc = (predictions == y_valid.cpu().numpy()).mean()
+
+        return acc
+    
+    def train(self):
+        """
+        Does a single training run of nepochs epochs
+        """
+        x = self.get_tensor_data(self.x)
+        gold = self.get_tensor_data(self.gold)
+
+        # set up optimizer
+        optimizer = torch.optim.AdamW(self.probe.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+
+        batch_size = len(x) if self.batch_size == -1 else self.batch_size
+        nbatches = len(x) // batch_size
+
+        # Start training (full batch)
+        for epoch in range(self.nepochs):
+            for j in range(nbatches):
+                x_batch = x[j*batch_size:(j+1)*batch_size]
+                gold_batch = gold[j*batch_size:(j+1)*batch_size]
+
+                # probe
+                p = self.probe(x_batch)
+
+                # get the corresponding loss
+                loss = self.get_loss(p, gold_batch)
+
+                # update the parameters
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+        return loss.detach().cpu().item()
+
+class UnsupervisedProbe(Probe):
+
+    def __init__(self, x0, x1):
+        super().__init__()
+        self.x0 = self.normalize(x0)
+        self.x1 = self.normalize(x1)
+        self.d = self.x0.shape[-1]
+        self.supervision_type = "U"
+
     def get_tensor_data(self):
         """
         Returns x0, x1 as appropriate tensors (rather than np arrays)
@@ -213,7 +284,7 @@ class CCS(object):
         x0 = torch.tensor(self.x0, dtype=torch.float, requires_grad=False, device=self.device)
         x1 = torch.tensor(self.x1, dtype=torch.float, requires_grad=False, device=self.device)
         return x0, x1
-
+    
     def get_loss(self, p0, p1):
         """
         Returns the CCS loss for two probabilities each of shape (n,1) or (n,)
@@ -269,14 +340,3 @@ class CCS(object):
                 optimizer.step()
 
         return loss.detach().cpu().item()
-
-    def repeated_train(self):
-        best_loss = np.inf
-        for train_num in range(self.ntries):
-            self.initialize_probe()
-            loss = self.train()
-            if loss < best_loss:
-                self.best_probe = copy.deepcopy(self.probe)
-                best_loss = loss
-
-        return best_loss
