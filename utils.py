@@ -46,7 +46,7 @@ def rearrange_by_act_type(act_dict):
     rearranged_dict = {}
     
     for key, value in act_dict.items():
-        act_type = key.split('.')[-1]  # Get the activation type from the key
+        act_type = key.split('.')[-1]  # Get the activation type from    the key
         if act_type not in rearranged_dict:
             rearranged_dict[act_type] = []
         rearranged_dict[act_type].append(value)

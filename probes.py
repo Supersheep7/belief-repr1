@@ -10,6 +10,7 @@ import pickle
 from tqdm import tqdm
 import einops
 from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 
 '''
 Here we have the three probes that we will deploy to test for internal representation of belief
@@ -110,7 +111,8 @@ class Probe(object):
                  dropout: Float = 0.0,
                  with_direction: bool = False,
                  seed: int = 42,
-                 max_iter: int = 1000
+                 max_iter: int = 1000,
+                 C = 1e6
                  ):
         # data
         self.var_normalize = var_normalize
@@ -128,6 +130,7 @@ class Probe(object):
         self.batch_size = batch_size
         self.weight_decay = weight_decay
         self.max_iter = max_iter
+        self.C = C
 
         # probe
         self.probe_type = probe_type
@@ -166,7 +169,7 @@ class Probe(object):
             del neg_acts
 
         if self.probe_type == "linear":
-            self.probe = LogisticRegression(max_iter=self.max_iter, solver="lbfgs", C=1/self.lr, random_state=self.seed)
+            self.probe = LogisticRegression(max_iter=self.max_iter, solver="lbfgs", C=self.C, random_state=self.seed)
         elif self.probe_type == "mmp":
             if  self.supervision_type == "S":
                 self.probe = MMP(acts=self.x, direction=self.direction, covariance=covariance)
@@ -412,7 +415,7 @@ def probe_sweep(list_of_datasets: List,
     accuracies = []
     directions = []
     best_probes = []
-    for dataset in list_of_datasets:
+    for dataset in tqdm(list_of_datasets, desc="Processing set"):
 
         if probe_config.probe_type == 'linear':
             dataset = einops.rearrange(dataset, 'n b d -> (n b) d')
@@ -428,7 +431,8 @@ def probe_sweep(list_of_datasets: List,
                                     control=probe_config.control,
                                     ntries=probe_config.ntries,
                                     seed=probe_config.seed,
-                                    max_iter=probe_config.max_iter)
+                                    max_iter=probe_config.max_iter,
+                                    C=probe_config.C)
         else:
             x0, x1 = dataset[0], dataset[1]
             x0_train, x0_test, x1_train, x1_test, _, y_test = train_test_split(x0, x1, labels, test_size=0.2, random_state=probe_config.seed)
@@ -441,7 +445,8 @@ def probe_sweep(list_of_datasets: List,
                                     control=probe_config.control,
                                     ntries=probe_config.ntries,
                                     seed=probe_config.seed,
-                                    max_iter=probe_config.max_iter)
+                                    max_iter=probe_config.max_iter,
+                                    C=probe_config.C)
         probe.initialize_probe()
         probe.repeated_train()
         accuracies.append(probe.get_acc(X_test, y_test)) if probe_config.supervision == "S" else accuracies.append(probe.get_acc(x0_test=x0_test, x1_test=x1_test, y_test=y_test))
