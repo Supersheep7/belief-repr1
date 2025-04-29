@@ -169,7 +169,7 @@ class Probe(object):
             del neg_acts
 
         if self.probe_type == "linear":
-            self.probe = LogisticRegression(max_iter=self.max_iter, solver="lbfgs", C=self.C, random_state=self.seed)
+            self.probe = LogisticRegression(max_iter=self.max_iter, solver="lbfgs", C=self.C, random_state=self.seed, n_jobs=-1)
         elif self.probe_type == "mmp":
             if  self.supervision_type == "S":
                 self.probe = MMP(acts=self.x, direction=self.direction, covariance=covariance)
@@ -415,7 +415,7 @@ def probe_sweep(list_of_datasets: List,
     accuracies = []
     directions = []
     best_probes = []
-    for dataset in tqdm(list_of_datasets, desc="Processing set"):
+    for dataset in list_of_datasets:
 
         if probe_config.probe_type == 'linear':
             dataset = einops.rearrange(dataset, 'n b d -> (n b) d')
