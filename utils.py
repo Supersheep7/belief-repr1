@@ -13,7 +13,7 @@ from transformer_lens.hook_points import (
 )
 from transformer_lens import HookedTransformer, ActivationCache
 from jaxtyping import Float, Int
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 import numpy as np 
 from torch.amp import autocast
 from tqdm import tqdm
@@ -32,6 +32,26 @@ def decompose_mha(mha_batch: Float[t.Tensor, "n_batch batch_size n_head d_head"]
     decomposed = einops.rearrange(mha_batch, 'n_batch batch_size n_head d_head -> n_head n_batch batch_size d_head')
     
     return [decomposed[i] for i in range(decomposed.shape[0])]
+
+def rearrange_by_act_type(act_dict):
+    """
+    Rearranges the activations in the dictionary by their type (e.g., 'resid_pre', 'resid_post').
+
+    Args:
+        act_dict (Dict): A dictionary where keys are activation types and values are tensors.
+
+    Returns:
+        Dict: A new dictionary with keys as activation types and values as lists of tensors.
+    """
+    rearranged_dict = {}
+    
+    for key, value in act_dict.items():
+        act_type = key.split('.')[-1]  # Get the activation type from the key
+        if act_type not in rearranged_dict:
+            rearranged_dict[act_type] = []
+        rearranged_dict[act_type].append(value)
+    
+    return rearranged_dict
 
 class LogitAttribution:
     def __init__(self, model, device=None):

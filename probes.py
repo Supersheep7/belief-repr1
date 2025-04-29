@@ -109,7 +109,8 @@ class Probe(object):
                  var_normalize: bool = False,
                  dropout: Float = 0.0,
                  with_direction: bool = False,
-                 seed: int = 42
+                 seed: int = 42,
+                 max_iter: int = 1000
                  ):
         # data
         self.var_normalize = var_normalize
@@ -126,6 +127,7 @@ class Probe(object):
         self.device = device
         self.batch_size = batch_size
         self.weight_decay = weight_decay
+        self.max_iter = max_iter
 
         # probe
         self.probe_type = probe_type
@@ -164,7 +166,7 @@ class Probe(object):
             del neg_acts
 
         if self.probe_type == "linear":
-            self.probe = LogisticRegression(max_iter=1000, solver="lbfgs", C=1/self.lr, random_state=self.seed)
+            self.probe = LogisticRegression(max_iter=self.max_iter, solver="lbfgs", C=1/self.lr, random_state=self.seed)
         elif self.probe_type == "mmp":
             if  self.supervision_type == "S":
                 self.probe = MMP(acts=self.x, direction=self.direction, covariance=covariance)
@@ -425,7 +427,8 @@ def probe_sweep(list_of_datasets: List,
                                     nepochs=probe_config.nepochs,
                                     control=probe_config.control,
                                     ntries=probe_config.ntries,
-                                    seed=probe_config.seed)
+                                    seed=probe_config.seed,
+                                    max_iter=probe_config.max_iter)
         else:
             x0, x1 = dataset[0], dataset[1]
             x0_train, x0_test, x1_train, x1_test, _, y_test = train_test_split(x0, x1, labels, test_size=0.2, random_state=probe_config.seed)
@@ -437,7 +440,8 @@ def probe_sweep(list_of_datasets: List,
                                     nepochs=probe_config.nepochs,
                                     control=probe_config.control,
                                     ntries=probe_config.ntries,
-                                    seed=probe_config.seed)
+                                    seed=probe_config.seed,
+                                    max_iter=probe_config.max_iter)
         probe.initialize_probe()
         probe.repeated_train()
         accuracies.append(probe.get_acc(X_test, y_test)) if probe_config.supervision == "S" else accuracies.append(probe.get_acc(x0_test=x0_test, x1_test=x1_test, y_test=y_test))
