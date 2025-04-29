@@ -1,9 +1,10 @@
-# -*- coding: utf-8 -*-
 from datasets import load_dataset
 import pandas as pd
 import os
 from tqdm import tqdm
 import numpy as np
+
+file_path = "/content/drive/My Drive/Thesis/belief-repr-1/"
 
 ''' True-false (Azariaa & Mitchell 2023) '''
 
@@ -37,17 +38,17 @@ class TruthfulQABuilder():
 
 class ITIBuilder():
   def __init__(self, dataset_name):
-    if dataset_name == "tqa_mc2": 
+    if dataset_name == "tqa_mc2":
         self.dataset = load_dataset("truthfulqa/truthful_qa", "multiple_choice")['validation']
-    elif dataset_name == "tqa_gen": 
+    elif dataset_name == "tqa_gen":
         self.dataset = load_dataset("truthfulqa/truthful_qa", 'generation')['validation']
-    elif dataset_name == 'tqa_gen_end_q': 
+    elif dataset_name == 'tqa_gen_end_q':
         self.dataset = load_dataset("truthfulqa/truthful_qa", 'generation')['validation']
-    else: 
+    else:
         raise ValueError("Invalid dataset name")
 
   def get_dataset(self):
-    
+
     return self.dataset.to_pandas()
 
 ''' MuLan (Fierro et al. 2024) '''
@@ -97,12 +98,12 @@ class TrueFalseEasyBuilder():
   def debug(self):
     print(os.listdir(self.path))
 
-''' 
-Following code is adapted from https://github.com/likenneth/honest_llama/tree/master 
-We avoided tokenizing since I am doing that myself during activation extraction 
+'''
+Following code is adapted from https://github.com/likenneth/honest_llama/tree/master
+We avoided tokenizing since I am doing that myself during activation extraction
 '''
 
-def get_prompts_tqa(dataset): 
+def get_prompts_tqa(dataset):
 
     all_prompts = []
     all_labels = []
@@ -113,65 +114,65 @@ def get_prompts_tqa(dataset):
 
         assert len(choices) == len(labels), (len(choices), len(labels))
 
-        for j in range(len(choices)): 
+        for j in range(len(choices)):
             choice = choices[j]
             label = labels[j]
             prompt = f"Q: {question} A: {choice}"
-            if i == 0 and j == 0: 
+            if i == 0 and j == 0:
                 print(prompt)
             all_prompts.append(prompt)
             all_labels.append(label)
-    
+
     return all_prompts, all_labels
 
-def get_prompts_tqa_gen(dataset): 
+def get_prompts_tqa_gen(dataset):
 
     all_prompts = []
     all_labels = []
     all_categories = []
-    for i in range(len(dataset)): 
+    for i in range(len(dataset)):
         question = dataset.iloc[i]['question']
         category = dataset.iloc[i]['category']
 
-        for j in range(len(dataset.iloc[i]['correct_answers'])): 
+        for j in range(len(dataset.iloc[i]['correct_answers'])):
             answer = dataset.iloc[i]['correct_answers'][j]
             prompt = f"Q: {question} A: {answer}"
             all_prompts.append(prompt)
             all_labels.append(1)
             all_categories.append(category)
-        
+
         for j in range(len(dataset.iloc[i]['incorrect_answers'])):
             answer = dataset.iloc[i]['incorrect_answers'][j]
             prompt = f"Q: {question} A: {answer}"
             all_prompts.append(prompt)
             all_labels.append(0)
             all_categories.append(category)
-        
+
     return all_prompts, all_labels, all_categories
 
-def get_prompts_tqa_gen_end_q(dataset): 
+def get_prompts_tqa_gen_end_q(dataset):
 
     all_prompts = []
     all_labels = []
     all_categories = []
-    for i in range(len(dataset)): 
+    for i in range(len(dataset)):
         question = dataset.iloc[i]['question']
         category = dataset.iloc[i]['category']
         rand_idx = np.random.randint(len(dataset))
         rand_question = dataset.iloc[rand_idx]['question']
 
-        for j in range(len(dataset.iloc[i]['correct_answers'])): 
+        for j in range(len(dataset.iloc[i]['correct_answers'])):
             answer = dataset.iloc[i]['correct_answers'][j]
             prompt = f"Q: {question} A: {answer} Q: {rand_question}"
             all_prompts.append(prompt)
             all_labels.append(1)
             all_categories.append(category)
-        
+
         for j in range(len(dataset.iloc[i]['incorrect_answers'])):
             answer = dataset.iloc[i]['incorrect_answers'][j]
             prompt = f"Q: {question} A: {answer} Q: {rand_question}"
             all_prompts.append(prompt)
             all_labels.append(0)
             all_categories.append(category)
-        
+
     return all_prompts, all_labels, all_categories

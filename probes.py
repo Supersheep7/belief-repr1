@@ -98,7 +98,7 @@ class Probe(object):
     def initialize_probe(self):
 
         if self.with_direction or self.probe_type == 'mmp':
-            # Compute direction 
+            # Compute direction
             if self.supervision_type == 'S':
                 # Compute direction from data if supervised
                 acts = t.tensor(self.x, dtype=t.float, requires_grad=True, device=self.device)
@@ -122,10 +122,10 @@ class Probe(object):
                 covariance = centered_data.t() @ centered_data / centered_data.shape[0]
 
         if self.probe_type == "linear":
-            self.probe = LogisticRegression(max_iter=self.max_iter, 
-                                            solver="lbfgs", 
-                                            C=self.C, 
-                                            random_state=self.seed, 
+            self.probe = LogisticRegression(max_iter=self.max_iter,
+                                            solver="lbfgs",
+                                            C=self.C,
+                                            random_state=self.seed,
                                             n_jobs=-1)
         elif self.probe_type == "mmp":
             if  self.supervision_type == "S":
@@ -150,11 +150,11 @@ class Probe(object):
 
     def repeated_train(self):
 
-        if self.probe_type == "linear":      
-            # We just need to call sklearn's fit    
+        if self.probe_type == "linear":
+            # We just need to call sklearn's fit
             self.probe.fit(self.x, self.labels)
             return None
-        
+
         else:
             best_loss = np.inf
             training = 0
@@ -230,10 +230,10 @@ class SupervisedProbe(Probe):
         y_test = t.tensor(y_test, dtype=t.float, requires_grad=False, device=self.device)
         if self.probe_type == "linear":
             # We just call sklearn's predict
-            probs = self.probe.predict(X_test.cpu().numpy())  
+            probs = self.probe.predict(X_test.cpu().numpy())
             predictions = probs
             acc = (predictions == y_test.cpu().numpy()).mean()
-            
+
         else:
             with t.no_grad():
                 probs = self.best_probe(X_test)
