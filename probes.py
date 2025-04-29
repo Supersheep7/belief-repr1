@@ -43,47 +43,6 @@ class MMP(nn.Module):
     def pred(self, x, iid=False):
         return self(x, iid=iid).round()
 
-class Saplma(nn.Module):
-
-    def __init__(self, input_dim, hidden_dim0=1024, hidden_dim1=512, hidden_dim2=256, output_dim=1, dropout=0):
-        super().__init__()
-        # Architecture
-        self.relu = nn.ReLU()
-        self.fc1 = nn.Linear(input_dim, hidden_dim0)
-        self.fc2 = nn.Linear(hidden_dim0, hidden_dim1)
-        self.fc3 = nn.Linear(hidden_dim1, hidden_dim2)
-        self.fc4 = nn.Linear(hidden_dim2, output_dim)
-        self.dropout = nn.Dropout(p=dropout)
-
-        # Hyperparameters
-        self._initialize_weights()
-
-    def _initialize_weights(self):
-        nn.init.xavier_uniform_(self.fc1.weight)
-        nn.init.zeros_(self.fc1.bias)
-        nn.init.xavier_uniform_(self.fc2.weight)
-        nn.init.zeros_(self.fc2.bias)
-        nn.init.xavier_uniform_(self.fc3.weight)
-        nn.init.zeros_(self.fc3.bias)
-        nn.init.xavier_uniform_(self.fc4.weight)
-        nn.init.zeros_(self.fc4.bias)
-
-    def forward(self, data):
-
-        out = self.fc1(data)
-        out = self.relu(out)
-        out = self.dropout(out)
-        out = self.fc2(out)
-        out = self.relu(out)
-        out = self.dropout(out)
-        out = self.fc3(out)
-        out = self.relu(out)
-        out = self.dropout(out)
-        logits = self.fc4(out)
-        probs = t.sigmoid(logits)
-
-        return probs
-
 class MLPProbe(nn.Module):
     def __init__(self, d):
         super().__init__()
@@ -139,6 +98,7 @@ class Probe(object):
     def initialize_probe(self):
 
         if self.with_direction or self.probe_type == 'mmp':
+            # Compute direction 
             if self.supervision_type == 'S':
                 # Compute direction from data if supervised
                 acts = t.tensor(self.x, dtype=t.float, requires_grad=True, device=self.device)
@@ -147,8 +107,6 @@ class Probe(object):
                   acts = einops.rearrange(acts, "n_batches d_batch d_act -> (n_batches d_batch) d_act")
                   labels = einops.rearrange(labels, "n_batches d_batch -> (n_batches d_batch)")
                 pos_acts, neg_acts = acts[labels == 1], acts[labels == 0]
-                del acts
-                del labels
             else:
                 # Otherwise, direction and covariance will be computed from contrast pairs
                 x0 = t.tensor(self.x0, dtype=t.float, requires_grad=True, device=self.device)
@@ -156,20 +114,19 @@ class Probe(object):
                 if self.probe_type != 'linear':
                   pos_acts = einops.rearrange(x0, "n_batches d_batch d_act -> (n_batches d_batch) d_act")
                   neg_acts = einops.rearrange(x1, "n_batches d_batch d_act -> (n_batches d_batch) d_act")
-                del x0
-                del x1
             pos_mean, neg_mean = pos_acts.mean(0), neg_acts.mean(0)
             self.direction = nn.Parameter(pos_mean - neg_mean, requires_grad=True)
             # Compute covariance if we use mmp
             if self.probe_type == 'mmp':
                 centered_data = t.cat([pos_acts - pos_mean, neg_acts - neg_mean], 0)
                 covariance = centered_data.t() @ centered_data / centered_data.shape[0]
-                del centered_data
-            del pos_acts
-            del neg_acts
 
         if self.probe_type == "linear":
-            self.probe = LogisticRegression(max_iter=self.max_iter, solver="lbfgs", C=self.C, random_state=self.seed, n_jobs=-1)
+            self.probe = LogisticRegression(max_iter=self.max_iter, 
+                                            solver="lbfgs", 
+                                            C=self.C, 
+                                            random_state=self.seed, 
+                                            n_jobs=-1)
         elif self.probe_type == "mmp":
             if  self.supervision_type == "S":
                 self.probe = MMP(acts=self.x, direction=self.direction, covariance=covariance)
@@ -177,8 +134,6 @@ class Probe(object):
                 self.probe = MMP(x0=self.x0, x1=self.x1, direction=self.direction, covariance=covariance)
         elif self.probe_type == "mlp":
             self.probe = MLPProbe(self.input_dim)
-        elif self.probe_type == "saplma":
-            self.probe = Saplma(input_dim=self.input_dim, dropout=self.dropout)
 
         self.probe.to(self.device) if self.probe_type != "linear" else None
 
@@ -195,7 +150,8 @@ class Probe(object):
 
     def repeated_train(self):
 
-        if self.probe_type == "linear":          
+        if self.probe_type == "linear":      
+            # We just need to call sklearn's fit    
             self.probe.fit(self.x, self.labels)
             return None
         
@@ -273,9 +229,9 @@ class SupervisedProbe(Probe):
         X_test = t.tensor(self.normalize(X_test), dtype=t.float, requires_grad=False, device=self.device)
         y_test = t.tensor(y_test, dtype=t.float, requires_grad=False, device=self.device)
         if self.probe_type == "linear":
-            with t.no_grad():
-                probs = self.probe.predict(X_test.cpu().numpy())  
-                predictions = probs
+            # We just call sklearn's predict
+            probs = self.probe.predict(X_test.cpu().numpy())  
+            predictions = probs
             acc = (predictions == y_test.cpu().numpy()).mean()
             
         else:
@@ -366,8 +322,8 @@ class UnsupervisedProbe(Probe):
         acc = (predictions == y_test.cpu().numpy()).mean()
         acc = max(acc, 1 - acc)
 
-        print("\nClassification Report:")
-        print(classification_report(y_test.cpu().numpy(), predictions, target_names=['Class 0', 'Class 1']))
+        # print("\nClassification Report:")
+        # print(classification_report(y_test.cpu().numpy(), predictions, target_names=['Class 0', 'Class 1']))
 
         return acc
 
