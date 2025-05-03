@@ -67,7 +67,7 @@ class Probe(object):
                  device: t.device = t.device("cuda") if t.cuda.is_available() else t.device("cpu"),
                  probe_type: str = "linear",
                  weight_decay: Float = 0.01,
-                 var_normalize: bool = False,
+                 var_normalize: bool = True,
                  dropout: Float = 0.0,
                  with_direction: bool = False,
                  seed: int = 42,
@@ -138,15 +138,20 @@ class Probe(object):
                                             random_state=self.seed,
                                             n_jobs=-1)
         else:            
-            if self.batch_size > 0 and self.supervision_type == "S":
+            if self.supervision_type == "S":
                 self.x = t.tensor(self.x, dtype=t.float, requires_grad=False, device=self.device)
-                self.labels = t.tensor(self.labels, dtype=t.float, requires_grad=False, device=self.device)
+                self.labels = self.labels.clone().detach()
                 dataset = TensorDataset(self.x, self.labels)
-            elif self.batch_size > 0 and self.supervision_type == "U":
+            else:
                 self.x0 = t.tensor(self.x0, dtype=t.float, requires_grad=False, device=self.device)
                 self.x1 = t.tensor(self.x1, dtype=t.float, requires_grad=False, device=self.device)
                 dataset = TensorDataset(self.x0, self.x1)
-            self.train_loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+            self.train_loader = DataLoader(dataset, batch_size=self.batch_size if self.batch_size > 0 else len(dataset), shuffle=True)
+            if self.probe_type == "linear_layer":
+                self.probe = nn.Sequential(
+                    nn.Linear(self.input_dim, 1),
+                    nn.Sigmoid()
+                )
             if self.probe_type == "mmp":
                 self.probe = MMP(direction=self.direction, covariance=self.covariance)
             if self.probe_type == "mlp":
@@ -272,24 +277,9 @@ class SupervisedProbe(Probe):
 
         if control:
             np.random.shuffle(self.labels)
-        
-        """
-        Rearrange the data if the probe is linear and the input is 3D (n_batches, batch_size, d_model).
-        """
-
-        if self.probe == "linear" and len(self.x.shape) > 2:
-            self.x = einops.rearrange(self.x, "n_batches d_batch d_act -> (n_batches d_batch) d_act")
-            self.labels = einops.rearrange(self.labels, "n_batches d_batch -> (n_batches d_batch)")
-        
+                
         self.initialize_probe()
         self.best_probe = copy.deepcopy(self.probe)
-
-    def get_tensor_data(self):
-        """
-        Forces x to be a tensor (rather than np array)
-        """
-        x = t.tensor(self.x, dtype=t.float, requires_grad=False, device=self.device)
-        return x
 
     def get_loss(self,
                  p: Float[t.Tensor, "batch"],
@@ -336,14 +326,6 @@ class UnsupervisedProbe(Probe):
         self.supervision_type = "U"
         self.initialize_probe()
         self.best_probe = copy.deepcopy(self.probe)
-
-    def get_tensor_data(self):
-        """
-        Returns x0, x1 as appropriate tensors (rather than np arrays)
-        """
-        x0 = t.tensor(self.x0, dtype=t.float, requires_grad=False, device=self.device)
-        x1 = t.tensor(self.x1, dtype=t.float, requires_grad=False, device=self.device)
-        return x0, x1
 
     def get_loss(self, p0, p1):
         """

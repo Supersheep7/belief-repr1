@@ -3,6 +3,9 @@ import seaborn as sns
 from sklearn.decomposition import PCA
 import einops
 from tqdm import tqdm
+from sklearn.preprocessing import StandardScaler
+import numpy as np
+import pandas as pd
 
 def mass_plot(labels, layers, heads=None, streams=None, color_map={0:'red',1:'blue'}, resid={0: 'pre', 1: 'mid', 2: 'post'}):
 
@@ -74,19 +77,32 @@ def mass_plot(labels, layers, heads=None, streams=None, color_map={0:'red',1:'bl
     plt.tight_layout()
     plt.show()
 
-def kde(data, pc1, pc2, color='blue', label=None):
+def kde(data, labels, first_direction, second_direction=None, color='blue', scatter=True):
+
+    assert len(data.shape) == 2, "Data must be 2D for KDE plot."
+    assert len(labels.shape) == 1, "Labels must be 1D for KDE plot."
+    assert data.shape[0] == labels.shape[0], "Data and labels must have the same number of samples."
+
+    data = np.array(data, dtype=np.float32)  # Ensure float32 dtype
+    labels = np.array(labels, dtype=np.int32)  # Ensure int32 dtype
+
+    first_projections = np.dot(data, first_direction)
+
+    if not second_direction:
+        plt.figure(figsize=(8, 6))
+        for class_label in np.unique(labels):
+            class_projections = first_projections[labels == class_label]
+            plt.hist(class_projections, bins=30, alpha=0.5, label=f'Class {class_label}')
+        plt.axvline(x=0, color='black', linestyle='--', label='Decision Boundary')
+        plt.xlabel('Projection onto LogReg Direction')
+        plt.ylabel('Count')
+        plt.title('Class Separation Along LogReg Direction')
+        plt.legend()
+        plt.show()
+
     
-    fig, ax = plt.subplots(figsize=(10, 6))
+    else:
 
-    # Create KDE plot
-    sns.kdeplot(data, ax=ax, color=color, label=label)
+        # Get second direction from orthogonal probe
 
-    # Customize the plot
-    ax.set_title('Kernel Density Estimation')
-    ax.set_xlabel('Value')
-    ax.set_ylabel('Density')
-    
-    if label:
-        ax.legend()
-
-    plt.show()
+        pass # TBD

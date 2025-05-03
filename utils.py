@@ -343,7 +343,7 @@ class ActivationExtractor():
         # Detach
         for hook_name in list(self.activations.keys()):
             tns = self.activations[hook_name]
-            self.activations[hook_name] = tns.detach().cpu().numpy()
+            self.activations[hook_name] = tns.detach().cpu()
         
         return self.activations, self.y
     
