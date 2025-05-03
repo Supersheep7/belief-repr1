@@ -101,20 +101,14 @@ class Probe(object):
 
     def initialize_direction(self):
         if self.supervision_type == 'S':
-                # Compute direction from data if supervised
-                acts = t.tensor(self.x, dtype=t.float, requires_grad=True, device=self.device)
-                labels = t.tensor(self.labels, dtype=t.float, requires_grad=True, device=self.device)
-                if self.probe_type != 'linear':
-                  acts = einops.rearrange(acts, "n_batches d_batch d_act -> (n_batches d_batch) d_act")
-                  labels = einops.rearrange(labels, "n_batches d_batch -> (n_batches d_batch)")
-                pos_acts, neg_acts = acts[labels == 1], acts[labels == 0]
+            # Compute direction from data if supervised
+            acts = t.tensor(self.x, dtype=t.float, requires_grad=True, device=self.device)
+            labels = t.tensor(self.labels, dtype=t.float, requires_grad=True, device=self.device)
+            pos_acts, neg_acts = acts[labels == 1], acts[labels == 0]
         else:
             # Otherwise, direction and covariance will be computed from contrast pairs
             x0 = t.tensor(self.x0, dtype=t.float, requires_grad=True, device=self.device)
             x1 = t.tensor(self.x1, dtype=t.float, requires_grad=True, device=self.device)
-            if self.probe_type != 'linear':
-                pos_acts = einops.rearrange(x0, "n_batches d_batch d_act -> (n_batches d_batch) d_act")
-                neg_acts = einops.rearrange(x1, "n_batches d_batch d_act -> (n_batches d_batch) d_act")
         pos_mean, neg_mean = pos_acts.mean(0), neg_acts.mean(0)
         self.direction = nn.Parameter(pos_mean - neg_mean, requires_grad=True)
         # Compute covariance if we use mmp
@@ -220,7 +214,7 @@ class Probe(object):
                     # get the corresponding loss
                     loss = self.get_loss(p.float(), labels_batch.float())
                 else:
-                    p0, p1 = self.probe(x_batch).squeeze(-1), self.probe(x_batch).squeeze(-1)
+                    p0, p1 = self.probe(x_batch).squeeze(-1), self.probe(labels_batch).squeeze(-1) # Here labels_batch is the second activation
                     loss = self.get_loss(p0.float(), p1.float())
 
                 # update the parameters
