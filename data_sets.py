@@ -10,7 +10,7 @@ file_path = "/content/drive/My Drive/Thesis/belief-repr-1/"
 
 class TrueFalseBuilder():
   def __init__(self):
-    self.path = f'{file_path}datasets/true-false'
+    self.path = f'/content/drive/My Drive/Thesis/belief-repr-1/datasets/true-false'
 
   def get_dataset(self):
     dfs = []
@@ -29,7 +29,7 @@ class TrueFalseBuilder():
 
 class TruthfulQABuilder():
   def __init__(self):
-    self.path = f'{file_path}datasets/truthfulqa/TruthfulQA.csv'
+    self.path = f'/content/drive/My Drive/Thesis/belief-repr-1/datasets/truthfulqa/TruthfulQA.csv'
 
   def get_dataset(self):
     return pd.read_csv(self.path)
@@ -64,7 +64,7 @@ class MuLanBuilder():
 
 class TrueFalseEasyBuilder():
   def __init__(self, clean=True):
-    self.path = f'{file_path}datasets/true-false-easy'
+    self.path = f'/content/drive/My Drive/Thesis/belief-repr-1/datasets/true-false-easy'
     self.clean = clean
 
   def get_dataset(self):

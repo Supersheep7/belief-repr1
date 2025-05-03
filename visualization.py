@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.decomposition import PCA
 import einops
 from tqdm import tqdm
@@ -71,4 +72,21 @@ def mass_plot(labels, layers, heads=None, streams=None, color_map={0:'red',1:'bl
             ax.set_ylabel("PC 2")
 
     plt.tight_layout()
+    plt.show()
+
+def kde(data, pc1, pc2, color='blue', label=None):
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Create KDE plot
+    sns.kdeplot(data, ax=ax, color=color, label=label)
+
+    # Customize the plot
+    ax.set_title('Kernel Density Estimation')
+    ax.set_xlabel('Value')
+    ax.set_ylabel('Density')
+    
+    if label:
+        ax.legend()
+
     plt.show()
