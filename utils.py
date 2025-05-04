@@ -296,7 +296,7 @@ class ActivationExtractor():
 
         for layer in layers:
             for name in names:
-                self.hooks.append((tlens.utils.get_act_name(name, layer), get_act_hook))
+                self.hooks.append((f"blocks.{layer}.{name}", get_act_hook))
           
                 
     def extract_activations_batch(self, 
