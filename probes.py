@@ -93,6 +93,7 @@ class Probe(object):
             # Otherwise, direction and covariance will be computed from contrast pairs
             x0 = t.tensor(self.x0, dtype=t.float, requires_grad=True, device=self.device)
             x1 = t.tensor(self.x1, dtype=t.float, requires_grad=True, device=self.device)
+            pos_acts, neg_acts = x0, x1
         pos_mean, neg_mean = pos_acts.mean(0), neg_acts.mean(0)
         self.direction = nn.Parameter(pos_mean - neg_mean, requires_grad=True)
         # Compute covariance if we use mmp
