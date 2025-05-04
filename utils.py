@@ -265,15 +265,16 @@ class ActivationExtractor():
                  data: List, 
                  labels: List, 
                  device: t.device,
-                 half: bool = False,
+                 half: bool,
                  batch_size=32):
         
         self.model = model.to(device)
         self.X = self.batchify(data, batch_size)
-        self.y = t.tensor(self.batchify(labels, batch_size), dtype=t.float16).to(device) if half else t.tensor(self.batchify(labels, batch_size)).to(device)
+        self.y = t.tensor(self.batchify(labels, batch_size), dtype=t.float32).to(device)
         self.hooks = []
         self.activations = {}
         self.half = half
+        self.device = device
 
 
     def set_hooks(self, layers, names, attn=False):
@@ -284,6 +285,7 @@ class ActivationExtractor():
         def get_act_hook(tensor, hook):
             
             last_token = tensor[:, -1, :, :].unsqueeze(0) if attn else tensor[..., -1, :].unsqueeze(0)  
+            last_token = last_token.to(dtype=t.float32, device=self.device)
 
             if hook.name in self.activations:
                 self.activations[hook.name] = t.cat([self.activations[hook.name], last_token], dim=0)
@@ -340,11 +342,6 @@ class ActivationExtractor():
         # Process
         for batch in tqdm(self.X, "Processing"):
             self.extract_activations_batch(batch, self.model)
-        # Detach
-        for hook_name in list(self.activations.keys()):
-            tns = self.activations[hook_name]
-            self.activations[hook_name] = tns.detach().cpu()
-        
         return self.activations, self.y
     
 class SteeredExtractor():

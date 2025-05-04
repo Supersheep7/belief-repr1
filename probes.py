@@ -1,5 +1,4 @@
 import numpy as np
-from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
 import copy
 import torch as t
@@ -11,7 +10,7 @@ import pickle
 from tqdm import tqdm
 import einops
 from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
 
 '''
 Here we have the three probes that we will deploy to test for internal representation of belief
@@ -35,20 +34,20 @@ class MMP(nn.Module):
         else:
             self.inv = nn.Parameter(inv, requires_grad=True)
 
-    def forward(self, x, iid=False):
+    def forward(self, x, iid=True):
         if iid:
             return t.nn.Sigmoid()(x @ self.inv @ self.direction).unsqueeze(1)
         else:
             return t.nn.Sigmoid()(x @ self.direction).unsqueeze(1)
 
-    def pred(self, x, iid=False):
+    def pred(self, x, iid=True):
         return self(x, iid=iid).round()
 
 class MLPProbe(nn.Module):
     def __init__(self, d):
         super().__init__()
-        self.linear1 = nn.Linear(d, 100)
-        self.linear2 = nn.Linear(100, 1)
+        self.linear1 = nn.Linear(d, d//2)
+        self.linear2 = nn.Linear(d//2, 1)
 
     def forward(self, x):
         h = t.relu(self.linear1(x))
@@ -57,53 +56,38 @@ class MLPProbe(nn.Module):
 
 class Probe(object):
 
-    def __init__(self,
-                 input_dim,
-                 nepochs: Int = 1000,
-                 ntries: Int = 10,
-                 lr: Float = 1e-3,
-                 batch_size: Int =-1,
-                 verbose: bool = False,
-                 device: t.device = t.device("cuda") if t.cuda.is_available() else t.device("cpu"),
-                 probe_type: str = "linear",
-                 weight_decay: Float = 0.01,
-                 var_normalize: bool = True,
-                 dropout: Float = 0.0,
-                 with_direction: bool = False,
-                 seed: int = 42,
-                 max_iter: int = 1000,
-                 C = 1e6
-                 ):
-        # data
-        self.var_normalize = var_normalize
-        self.input_dim =  input_dim
-        self.dropout = dropout
-        self.with_direction = with_direction
-        self.seed = seed
-        self.direction = None
-        self.covariance = None
+    def __init__(self, probe_config):
 
-        # training
-        self.nepochs = nepochs
-        self.ntries = ntries
-        self.lr = lr
-        self.verbose = verbose
-        self.device = device
-        self.batch_size = batch_size
-        self.weight_decay = weight_decay
-        self.max_iter = max_iter
-        self.C = C
-        self.train_loader = None
+        # probe config
+        self.var_normalize = probe_config.var_normalize
+        self.dropout = probe_config.dropout
+        self.with_direction = probe_config.with_direction
+        self.seed = probe_config.seed
+        self.nepochs = probe_config.nepochs
+        self.ntries = probe_config.ntries
+        self.lr = probe_config.lr
+        self.verbose = probe_config.verbose
+        self.device = probe_config.device
+        self.batch_size = probe_config.batch_size
+        self.weight_decay = probe_config.weight_decay
+        self.max_iter = probe_config.max_iter
+        self.C = probe_config.C
+        self.probe_type = probe_config.probe_type
+        self.control = probe_config.control
 
         # probe
-        self.probe_type = probe_type
         self.probe = None
+        self.best_probe = None
+        self.train_loader = None
+        self.test_loader = None
+        self.direction = None
+        self.covariance = None
 
     def initialize_direction(self):
         if self.supervision_type == 'S':
             # Compute direction from data if supervised
             acts = t.tensor(self.x, dtype=t.float, requires_grad=True, device=self.device)
-            labels = t.tensor(self.labels, dtype=t.float, requires_grad=True, device=self.device)
+            labels = t.tensor(self.labels_train, dtype=t.float, requires_grad=True, device=self.device)
             pos_acts, neg_acts = acts[labels == 1], acts[labels == 0]
         else:
             # Otherwise, direction and covariance will be computed from contrast pairs
@@ -126,42 +110,61 @@ class Probe(object):
             self.initialize_direction()
 
         if self.probe_type == "linear":
+            self.x = np.array(self.x.detach().cpu())
+            self.X_test = np.array(self.X_test.detach().cpu())
+            self.labels_train = np.array(self.labels_train.detach().cpu())
+            self.labels_test = np.array(self.labels_test.detach().cpu())
             self.probe = LogisticRegression(max_iter=self.max_iter,
                                             solver="lbfgs",
                                             C=self.C,
                                             random_state=self.seed,
                                             n_jobs=-1)
-        else:            
+        else:
             if self.supervision_type == "S":
-                self.x = t.tensor(self.x, dtype=t.float, requires_grad=False, device=self.device)
-                self.labels = self.labels.clone().detach()
-                dataset = TensorDataset(self.x, self.labels)
+                x = self.x.clone().detach()
+                X_test = self.X_test.clone().detach()
+                train_labels = self.labels_train.clone().detach()
+                test_labels = self.labels_test.clone().detach()
+                dataset = TensorDataset(x, train_labels)
+                test_dataset = TensorDataset(X_test, test_labels)
             else:
                 self.x0 = t.tensor(self.x0, dtype=t.float, requires_grad=False, device=self.device)
                 self.x1 = t.tensor(self.x1, dtype=t.float, requires_grad=False, device=self.device)
-                dataset = TensorDataset(self.x0, self.x1)
+                dataset = TensorDataset(self.x0_train, self.x1_train)
+                test_dataset = TensorDataset(self.x0_test, self.x1_test)
+
             self.train_loader = DataLoader(dataset, batch_size=self.batch_size if self.batch_size > 0 else len(dataset), shuffle=True)
+            self.test_loader = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=False)
+
             if self.probe_type == "linear_layer":
                 self.probe = nn.Sequential(
-                    nn.Linear(self.input_dim, 1),
+                    nn.Linear(self.input_dim, 1, bias=False),
                     nn.Sigmoid()
                 )
             if self.probe_type == "mmp":
                 self.probe = MMP(direction=self.direction, covariance=self.covariance)
             if self.probe_type == "mlp":
                 self.probe = MLPProbe(self.input_dim)
-            self.probe.to(self.device) 
 
-    def normalize(self, x):
+            self.probe.to(self.device)
+
+    def normalize(self, x_train, x_test):
         """
         Mean-normalizes the data x (of shape (n, d))
         If self.var_normalize, also divides by the standard deviation
         """
-        normalized_x = x - x.mean(axis=-1, keepdims=True)
-        if self.var_normalize:
-            normalized_x /= normalized_x.std(axis=-1, keepdims=True)
+        train_mean = x_train.mean(dim=0, keepdim=True)
+        train_std = x_train.std(dim=0, keepdim=True)
 
-        return normalized_x
+        normalized_x_train = x_train - train_mean
+        if self.var_normalize:
+            normalized_x_train /= (train_std + 1e-8)
+
+        normalized_x_test = x_test - train_mean
+        if self.var_normalize:
+            normalized_x_test /= (train_std + 1e-8)
+
+        return normalized_x_train, normalized_x_test
 
     def repeated_train(self):
 
@@ -172,12 +175,13 @@ class Probe(object):
         """
 
         if self.probe_type == "linear":
-
-            self.probe.fit(self.x, self.labels.cpu())
+            self.initialize_probe()
+            self.probe.fit(self.x, self.labels_train)
+            self.best_probe = copy.deepcopy(self.probe)
             return None
 
         else:
-            best_loss = np.inf
+            best_loss = float('inf')
             for train_num in range(self.ntries):
                 self.initialize_probe()
                 loss = self.train()
@@ -185,7 +189,7 @@ class Probe(object):
                     self.best_probe = copy.deepcopy(self.probe)
                     best_loss = loss
             return best_loss
-        
+
     def train(self):
         """
         Does a single training run of nepochs epochs
@@ -194,27 +198,22 @@ class Probe(object):
         # set up optimizer
         optimizer = t.optim.AdamW(self.probe.parameters(), lr=self.lr, weight_decay=self.weight_decay)
 
-        best_loss = float('inf')  
-        patience = 5  
-        patience_counter = 0 
+        best_loss = float('inf')
+        epoch_losses = []
+        accuracies = []
 
         # Start training
         for epoch in range(self.nepochs):
             epoch_loss = 0.0  # Initialize epoch loss
-            
+
             for x_batch, labels_batch in self.train_loader:
-
                 # probe
-                '''
-                Return the probabilities: I am NOT sure I should squeeze this tensor on the last dimension
-                '''
                 if self.supervision_type == "S":
-                    p: t.Tensor = self.probe(x_batch).squeeze(-1)
-
+                    p = self.probe(x_batch).squeeze(-1)
                     # get the corresponding loss
                     loss = self.get_loss(p.float(), labels_batch.float())
                 else:
-                    p0, p1 = self.probe(x_batch).squeeze(-1), self.probe(labels_batch).squeeze(-1) # Here labels_batch is the second activation
+                    p0, p1 = self.probe(x_batch).squeeze(-1), self.probe(x_batch).squeeze(-1)
                     loss = self.get_loss(p0.float(), p1.float())
 
                 # update the parameters
@@ -222,16 +221,34 @@ class Probe(object):
                 loss.backward()
                 optimizer.step()
                 epoch_loss += loss.item()
-            
-            if epoch_loss < best_loss:
-                best_loss = epoch_loss  # Update best loss
-                patience_counter = 0    # Reset patience counter
-            else:
-                patience_counter += 1
 
-            # Early stopping condition
-            if patience_counter >= patience:
-                break
+            if epoch_loss < best_loss:
+                best_loss = epoch_loss
+
+            epoch_losses.append(epoch_loss)  # Track epoch loss for plotting
+
+            self.probe.eval()  # Set the model to evaluation mode
+            with t.no_grad():  # Disable gradient computation during validation
+                correct = 0
+                total = 0
+                for x_batch, labels_batch in self.test_loader:  # Assuming you have a test_loader
+                  predictions = self.probe(x_batch).squeeze(-1).round()
+                  correct += (predictions == labels_batch).sum().item()
+                  total += labels_batch.size(0)
+                  acc = correct / total
+            accuracies.append((correct / total))
+
+        if self.verbose:
+            # Plot the training and validation loss
+            plt.figure(figsize=(10, 6))
+            plt.plot(range(1, len(epoch_losses) + 1), epoch_losses, label='Training Loss')
+            plt.plot(range(1, len(accuracies) + 1), accuracies, label='Online Accuracy', linestyle='--')
+            plt.xlabel('Epoch')
+            plt.ylabel('Loss')
+            plt.title(f'Training and Validation Loss Over Epochs Accuracy at the last step: {correct / total}')
+            plt.legend()
+            plt.grid(True)
+            plt.show()
 
         return best_loss
 
@@ -255,25 +272,24 @@ class Probe(object):
 class SupervisedProbe(Probe):
 
     def __init__(self,
-                 x: Float[t.Tensor, "n_data d_activation"],
-                 input_dim: Int,
-                 labels: Float[t.Tensor, "n_data"],
-                 control: bool = False,
-                 **kwargs):
-        super().__init__(input_dim=input_dim, **kwargs)
+                 x_train: Float[t.Tensor, "n_data d_activation"],
+                 x_test: Float[t.Tensor, "n_data d_activation"],
+                 labels_train: Float[t.Tensor, "n_data"],
+                 labels_test: Float[t.Tensor, "n_data"],
+                 probe_config
+                 ):
+        super().__init__(probe_config=probe_config)
+        self.input_dim = x_train.shape[-1]
         self.supervision_type = "S"
-        self.x = self.normalize(x)
-        self.labels = labels
+        self.x, self.X_test = self.normalize(x_train, x_test)
+        self.labels_train = labels_train
+        self.labels_test = labels_test
 
         """
         Shuffle the labels if control is True. This is done to create a control condition for the probe.
         """
-
-        if control:
+        if self.control:
             np.random.shuffle(self.labels)
-                
-        self.initialize_probe()
-        self.best_probe = copy.deepcopy(self.probe)
 
     def get_loss(self,
                  p: Float[t.Tensor, "batch"],
@@ -282,44 +298,45 @@ class SupervisedProbe(Probe):
 
         return nn.functional.binary_cross_entropy(p, labels)
 
-    def get_acc(self,
-                X_test: Float[t.Tensor, "n_points d_activation"],
-                y_test: Float[t.Tensor, "n_points"]
-    ) -> Float:
+    def get_acc(self) -> Float:
         '''
         Returns accuracy for the best probe trained on a specific activation
         '''
-        X_test = t.tensor(self.normalize(X_test), dtype=t.float, requires_grad=False, device=self.device)
-        y_test = y_test.clone().detach().to(dtype=t.float, device=self.device)
-        
         if self.probe_type == "linear":
             # We just call sklearn's predict
-            predictions = self.probe.predict(X_test.cpu().numpy())
-            acc = (predictions == y_test.cpu().numpy()).mean()
+            X_test = self.X_test
+            labels_test = self.labels_test
+            predictions = self.probe.predict(X_test)
+            acc = (predictions == labels_test).mean()
 
         else:
             with t.no_grad():
-                probs = self.best_probe(X_test)
-            predictions = (probs.flatten().detach().cpu().numpy() >= 0.5).astype(int)
-            acc = (predictions == y_test.cpu().numpy()).mean()
+                correct = 0
+                total = 0
+                for x_batch, labels_batch in self.test_loader:
+                    predictions = self.best_probe(x_batch).squeeze(-1).round()
+                    correct += (predictions == labels_batch).sum().item()
+                    total += labels_batch.size(0)
+                acc = (correct / total)
 
         return acc
 
 class UnsupervisedProbe(Probe):
 
     def __init__(self,
-                 x0: Float[t.Tensor, "n_batch batch_size d_activation"],
-                 x1: Float[t.Tensor, "n_batch batch_size d_activation"],
+                 x0_train: Float[t.Tensor, "n_batch batch_size d_activation"],
+                 x0_test: Float[t.Tensor, "n_batch batch_size d_activation"],
+                 x1_train: Float[t.Tensor, "n_batch batch_size d_activation"],
+                 x1_test: Float[t.Tensor, "n_batch batch_size d_activation"],
                  labels: Float[t.Tensor, "n_batch batch_size"],
-                 input_dim: Int,
-                 **kwargs):
-        super().__init__(input_dim=input_dim, **kwargs)
-        self.x0 = self.normalize(x0)
-        self.x1 = self.normalize(x1)
+                 probe_config
+                 ):
+        super().__init__(probe_config=probe_config)
+        self.input_dim = x0_train.shape[-1]
+        self.x0_train, self.x0_test = self.normalize(x0_train, x0_test)
+        self.x1_train, self.x1_test = self.normalize(x1_train, x1_test)
         self.labels = labels
         self.supervision_type = "U"
-        self.initialize_probe()
-        self.best_probe = copy.deepcopy(self.probe)
 
     def get_loss(self, p0, p1):
         """
@@ -329,15 +346,13 @@ class UnsupervisedProbe(Probe):
         consistent_loss = ((p0 - (1-p1))**2).mean(0)
         return informative_loss + consistent_loss
 
-    def get_acc(self,
-                x0_test: Float[t.Tensor, "n_batch batch_size d_activation"],
-                x1_test: Float[t.Tensor, "n_batch batch_size d_activation"]
-    ) -> Float:
+    def get_acc(self) -> Float:
         '''
         Returns accuracy for the best probe trained on a specific activation
         '''
-        x0_test = t.tensor(self.normalize(x0_test), dtype=t.float, requires_grad=False, device=self.device)
-        x1_test = t.tensor(self.normalize(x1_test), dtype=t.float, requires_grad=False, device=self.device)
+        x0_test = self.x0_test.clone().detach().to(dtype=t.float, device=self.device)
+        x1_test = self.x1_test.clone().detach().to(dtype=t.float, device=self.device)
+        y_test = self.y_test.clone().detach().to(dtype=t.float, device=self.device)
         y_test = t.tensor(self.labels, dtype=t.float, requires_grad=False, device=self.device).reshape(-1)
         with t.no_grad():
             p0, p1 = self.best_probe(x0_test), self.best_probe(x1_test)
@@ -377,39 +392,19 @@ def probe_sweep(list_of_datasets: List,
         if probe_config.supervision == "S":
             dataset = einops.rearrange(dataset, 'n b d -> (n b) d')
             X_train, X_test, y_train, y_test = train_test_split(dataset, labels, test_size=0.2, random_state=probe_config.seed)
-            probe = SupervisedProbe(probe_type=probe_config.probe_type,
-                                    input_dim=dataset.shape[-1],
-                                    x=X_train,
-                                    labels=y_train,
-                                    batch_size=probe_config.batch_size,
-                                    with_direction=probe_config.with_direction,
-                                    nepochs=probe_config.nepochs,
-                                    control=probe_config.control,
-                                    ntries=probe_config.ntries,
-                                    seed=probe_config.seed,
-                                    max_iter=probe_config.max_iter,
-                                    C=probe_config.C)
+            probe = SupervisedProbe(x_train=X_train, labels_train=y_train,
+                                    x_test=X_test, labels_test=y_test,
+                                    probe_config=probe_config)
         else:
             x0, x1 = dataset[0], dataset[1]
             x0 = einops.rearrange(x0, 'n b d -> (n b) d')
             x1 = einops.rearrange(x1, 'n b d -> (n b) d')
             x0_train, x0_test, x1_train, x1_test, _, y_test = train_test_split(x0, x1, labels, test_size=0.2, random_state=probe_config.seed)
-            probe = UnsupervisedProbe(probe_type=probe_config.probe_type,
-                                    input_dim=x0.shape[-1],
-                                    x0=x0_train,
-                                    x1=x1_train,
-                                    labels=y_test,
-                                    batch_size=probe_config.batch_size,
-                                    with_direction=probe.config.with_direction,
-                                    nepochs=probe_config.nepochs,
-                                    control=probe_config.control,
-                                    ntries=probe_config.ntries,
-                                    seed=probe_config.seed,
-                                    max_iter=probe_config.max_iter,
-                                    C=probe_config.C)
-        probe.initialize_probe()
+            probe = UnsupervisedProbe(x0_train=x0_train, x1_train=x1_train,
+                                    x0_test=x0_test, x1_test=x1_test, labels=y_test,
+                                    probe_config=probe_config)
         probe.repeated_train()
-        accuracies.append(probe.get_acc(X_test, y_test)) if probe_config.supervision == "S" else accuracies.append(probe.get_acc(x0_test, x1_test))
+        accuracies.append(probe.get_acc())
         directions.append(probe.get_direction())
         best_probes.append(probe.best_probe)
 
