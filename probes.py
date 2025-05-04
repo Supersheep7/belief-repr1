@@ -25,7 +25,7 @@ Neural is a tentative copy of SAPLMA as described in Azaria & Mitchell 2023
 
 class MMP(nn.Module):
 
-    def __init__(self, direction, covariance, inv=None, atol=1e-3) -> None:
+    def __init__(self, direction, covariance, inv=None, atol=1e-3):
         super().__init__()
         self.direction = direction
 
@@ -39,10 +39,7 @@ class MMP(nn.Module):
             return t.nn.Sigmoid()(x @ self.inv @ self.direction).unsqueeze(1)
         else:
             return t.nn.Sigmoid()(x @ self.direction).unsqueeze(1)
-
-    def pred(self, x, iid=True):
-        return self(x, iid=iid).round()
-
+        
 class MLPProbe(nn.Module):
     def __init__(self, d):
         super().__init__()
