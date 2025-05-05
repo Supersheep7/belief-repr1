@@ -176,3 +176,29 @@ def get_prompts_tqa_gen_end_q(dataset):
             all_categories.append(category)
 
     return all_prompts, all_labels, all_categories
+
+def unsupervised_builder(dataset: pd.DataFrame):
+    
+    X_original = list(dataset['statement'])
+    y = list(dataset['label'])
+    x0 = []
+    x1 = []
+
+    # Generate contrast pairs
+    for x in X_original:
+      x0.append(f"'{x}' is a true statement")
+      x1.append(f"'{x}' is a false statement")        
+
+    return x0, x1, y
+
+def unsupervised_builder_tqa(dataset: pd.DataFrame):
+    
+    prompts, y, _ = get_prompts_tqa_gen(dataset)
+    x0 = []
+    x1 = []
+
+    for x in prompts:
+      x0.append(f"'{x}'. The answer is correct")
+      x1.append(f"'{x}'. The answer is incorrect")
+
+    return x0, x1, y
