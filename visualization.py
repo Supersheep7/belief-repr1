@@ -87,7 +87,7 @@ def get_direction(data, labels, model):
     intercept = model.intercept_[0]
     theta = np.hstack([intercept, coefficients])
 
-    return theta
+    return theta / np.linalg.norm(theta)
 
 def get_direction_with_constraint(data, labels, model, first_direction):
     
@@ -103,11 +103,11 @@ def get_direction_with_constraint(data, labels, model, first_direction):
         model.fit(data_orthogonalized[:, 1:], labels) # Exclude the bias term when fitting
 
         # Step 4: Extract theta_2 (intercept and coefficients)
-        second_direction = np.hstack([model.intercept_[0], model.coef_[0]])
+        theta = np.hstack([model.intercept_[0], model.coef_[0]])
     
-        return second_direction
+        return theta / np.linalg.norm(theta)
 
-def kde(data, labels, model, n_dir=2, color='blue', scatter=True):
+def kde(data, labels, model, n_dir=2, scatter=True):
 
     assert len(data.shape) == 2, "Data must be 2D for KDE plot."
     assert len(labels.shape) == 1, "Labels must be 1D for KDE plot."
@@ -149,7 +149,8 @@ def kde(data, labels, model, n_dir=2, color='blue', scatter=True):
         })
 
         sns.jointplot(data=data, x='Direction 1', y='Direction 2', kind='kde', hue='Label', palette='coolwarm', fill=False, bw_adjust=0.5)
-        sns.scatterplot(data=data, x='Direction 1', y='Direction 2', hue='Label', palette='coolwarm', fill=False, marker='o', s=50, edgecolor='black', alpha=0.7)
+        if scatter:
+            sns.scatterplot(data=data, x='Direction 1', y='Direction 2', hue='Label', palette='coolwarm', fill=False, marker='o', s=50, edgecolor='black', alpha=0.7)
         plt.suptitle("KDE with Marginals for Labeled Projections", fontsize=16)
         plt.subplots_adjust(top=0.95)
         plt.show()
