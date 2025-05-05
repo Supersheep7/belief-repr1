@@ -4,6 +4,8 @@ from sklearn.decomposition import PCA
 import einops
 from tqdm import tqdm
 from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.base import clone
 import numpy as np
 import pandas as pd
 
@@ -77,18 +79,54 @@ def mass_plot(labels, layers, heads=None, streams=None, color_map={0:'red',1:'bl
     plt.tight_layout()
     plt.show()
 
-def kde(data, labels, first_direction, second_direction=None, color='blue', scatter=True):
+def get_direction(data, labels, model):
+    
+    model = clone(model)
+    model.fit(data, labels)
+    coefficients = model.coef_[0]
+    intercept = model.intercept_[0]
+    theta = np.hstack([intercept, coefficients])
+
+    return theta
+
+def get_direction_with_constraint(data, labels, model, first_direction):
+    
+        # Add a bias term (column of ones) for the intercept term
+        X_with_bias = np.hstack([np.ones((data.shape[0], 1)), data])
+
+        # Remove the projection of X onto theta_1
+        projection_on_theta1 = np.dot(X_with_bias, first_direction)
+        data_orthogonalized = X_with_bias - np.outer(projection_on_theta1, first_direction) / np.dot(first_direction, first_direction)
+
+        # Step 3: Train the second logistic regression model on the orthogonalized data
+        model = clone(model)
+        model.fit(data_orthogonalized[:, 1:], labels) # Exclude the bias term when fitting
+
+        # Step 4: Extract theta_2 (intercept and coefficients)
+        second_direction = np.hstack([model.intercept_[0], model.coef_[0]])
+    
+        return second_direction
+
+def kde(data, labels, model, n_dir=2, color='blue', scatter=True):
 
     assert len(data.shape) == 2, "Data must be 2D for KDE plot."
     assert len(labels.shape) == 1, "Labels must be 1D for KDE plot."
     assert data.shape[0] == labels.shape[0], "Data and labels must have the same number of samples."
 
-    data = np.array(data, dtype=np.float32)  # Ensure float32 dtype
-    labels = np.array(labels, dtype=np.int32)  # Ensure int32 dtype
+    if data.shape > 2:
+        data = einops.rearrange(data, 'n_batch batch_size d_model -> (n_batch batch_size) d_model')
+    if labels.shape > 1:   
+        labels = einops.rearrange(labels, 'n_batch batch_size -> (n_batch batch_size)')
 
+    data = np.array(data, dtype=np.float32)
+    labels = np.array(labels, dtype=np.int32)
+    scaler = StandardScaler()
+    data = scaler.fit_transform(data)
+
+    first_direction = get_direction(data, labels, model)
     first_projections = np.dot(data, first_direction)
 
-    if not second_direction:
+    if n_dir == 1:
         plt.figure(figsize=(8, 6))
         for class_label in np.unique(labels):
             class_projections = first_projections[labels == class_label]
@@ -100,9 +138,20 @@ def kde(data, labels, first_direction, second_direction=None, color='blue', scat
         plt.legend()
         plt.show()
 
-    
     else:
 
-        # Get second direction from orthogonal probe
+        second_direction = get_direction_with_constraint(data, labels, model, first_direction)
+        second_projections = np.dot(data, second_direction)
+        data = pd.DataFrame({
+            'Direction 1': first_projections,
+            'Direction 2': second_projections,
+            'Label': labels
+        })
 
-        pass # TBD
+        sns.jointplot(data=data, x='Direction 1', y='Direction 2', kind='kde', hue='Label', palette='coolwarm', fill=False, bw_adjust=0.5)
+        sns.scatterplot(data=data, x='Direction 1', y='Direction 2', hue='Label', palette='coolwarm', fill=False, marker='o', s=50, edgecolor='black', alpha=0.7)
+        plt.suptitle("KDE with Marginals for Labeled Projections", fontsize=16)
+        plt.subplots_adjust(top=0.95)
+        plt.show()
+
+    return
