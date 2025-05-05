@@ -119,17 +119,19 @@ class Probe(object):
                                             n_jobs=-1)
         else:
             if self.supervision_type == "S":
-                x = self.x.clone().detach()
+                x_train = self.x.clone().detach()
+                y_train = self.labels_train.clone().detach()
+                dataset = TensorDataset(x_train, y_train)
                 X_test = self.X_test.clone().detach()
-                train_labels = self.labels_train.clone().detach()
-                test_labels = self.labels_test.clone().detach()
-                dataset = TensorDataset(x, train_labels)
-                test_dataset = TensorDataset(X_test, test_labels)
+                y_test = self.labels_test.clone().detach()
+                test_dataset = TensorDataset(X_test, y_test)
             else:
-                self.x0 = t.tensor(self.x0, dtype=t.float, requires_grad=False, device=self.device)
-                self.x1 = t.tensor(self.x1, dtype=t.float, requires_grad=False, device=self.device)
-                dataset = TensorDataset(self.x0_train, self.x1_train)
-                test_dataset = TensorDataset(self.x0_test, self.x1_test)
+                x0_train = self.x0_train.clone().detach()
+                x1_train = self.x1_train.clone().detach()
+                dataset = TensorDataset(x0_train, x1_train)
+                x0_test = self.x0_test.clone().detach()
+                y_test = self.labels.clone().detach()
+                test_dataset = TensorDataset(x0_test, y_test)
 
             self.train_loader = DataLoader(dataset, batch_size=self.batch_size if self.batch_size > 0 else len(dataset), shuffle=True)
             self.test_loader = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=False)
@@ -211,7 +213,7 @@ class Probe(object):
                     # get the corresponding loss
                     loss = self.get_loss(p.float(), labels_batch.float())
                 else:
-                    p0, p1 = self.probe(x_batch).squeeze(-1), self.probe(x_batch).squeeze(-1)
+                    p0, p1 = self.probe(x_batch).squeeze(-1), self.probe(labels_batch).squeeze(-1)
                     loss = self.get_loss(p0.float(), p1.float())
 
                 # update the parameters
@@ -224,17 +226,10 @@ class Probe(object):
                 best_loss = epoch_loss
 
             epoch_losses.append(epoch_loss)  # Track epoch loss for plotting
-
+            self.best_probe = copy.deepcopy(self.probe)
             self.probe.eval()  # Set the model to evaluation mode
-            with t.no_grad():  # Disable gradient computation during validation
-                correct = 0
-                total = 0
-                for x_batch, labels_batch in self.test_loader:  # Assuming you have a test_loader
-                  predictions = self.probe(x_batch).squeeze(-1).round()
-                  correct += (predictions == labels_batch).sum().item()
-                  total += labels_batch.size(0)
-                  acc = correct / total
-            accuracies.append((correct / total))
+            current_acc = self.get_acc()
+            accuracies.append(current_acc)
 
         if self.verbose:
             # Plot the training and validation loss
@@ -243,7 +238,7 @@ class Probe(object):
             plt.plot(range(1, len(accuracies) + 1), accuracies, label='Online Accuracy', linestyle='--')
             plt.xlabel('Epoch')
             plt.ylabel('Loss')
-            plt.title(f'Training and Validation Loss Over Epochs Accuracy at the last step: {correct / total}')
+            plt.title(f'Training and Validation Loss Over Epochs Accuracy at the last step: {current_acc}')
             plt.legend()
             plt.grid(True)
             plt.show()
@@ -335,6 +330,7 @@ class UnsupervisedProbe(Probe):
         self.x1_train, self.x1_test = self.normalize(x1_train, x1_test)
         self.labels = labels
         self.supervision_type = "U"
+        assert probe_config.probe_type != "linear", ("You shouldn't call a LogisticRegression for an Unsupervised Probe")
 
     def get_loss(self, p0, p1):
         """
@@ -348,10 +344,9 @@ class UnsupervisedProbe(Probe):
         '''
         Returns accuracy for the best probe trained on a specific activation
         '''
-        x0_test = self.x0_test.clone().detach().to(dtype=t.float, device=self.device)
-        x1_test = self.x1_test.clone().detach().to(dtype=t.float, device=self.device)
-        y_test = self.y_test.clone().detach().to(dtype=t.float, device=self.device)
-        y_test = t.tensor(self.labels, dtype=t.float, requires_grad=False, device=self.device).reshape(-1)
+        x0_test = self.x0_test.clone().detach()
+        x1_test = self.x1_test.clone().detach()
+        y_test = self.labels.clone().detach()
         with t.no_grad():
             p0, p1 = self.best_probe(x0_test), self.best_probe(x1_test)
         '''Test below'''
@@ -360,9 +355,6 @@ class UnsupervisedProbe(Probe):
         '''Test above'''
         acc = (predictions == y_test.cpu().numpy()).mean()
         acc = max(acc, 1 - acc)
-
-        # print("\nClassification Report:")
-        # print(classification_report(y_test.cpu().numpy(), predictions, target_names=['Class 0', 'Class 1']))
 
         return acc
 
