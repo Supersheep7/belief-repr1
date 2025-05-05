@@ -330,7 +330,7 @@ class UnsupervisedProbe(Probe):
         self.x1_train, self.x1_test = self.normalize(x1_train, x1_test)
         self.labels = labels
         self.supervision_type = "U"
-        assert probe_config.probe_type != "linear", ("You shouldn't call a LogisticRegression for an Unsupervised Probe")
+        assert probe_config.probe_type != "linear", ("You shouldn't call sklearn's LogisticRegression for an Unsupervised Probe")
 
     def get_loss(self, p0, p1):
         """
@@ -351,7 +351,7 @@ class UnsupervisedProbe(Probe):
             p0, p1 = self.best_probe(x0_test), self.best_probe(x1_test)
         '''Test below'''
         avg_confidence = 0.5*(p0 + (1-p1))
-        predictions = (avg_confidence.detach().cpu().numpy() < 0.5).astype(int).reshape(-1)
+        predictions = (avg_confidence.detach().cpu().numpy() < 0.5).astype(int)[:, 0]
         '''Test above'''
         acc = (predictions == y_test.cpu().numpy()).mean()
         acc = max(acc, 1 - acc)
