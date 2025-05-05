@@ -10,8 +10,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.colors import Normalize
 from matplotlib import cm
-
-
+from scipy.stats import gaussian_kde
 
 def mass_plot(labels, layers, heads=None, streams=None, color_map={0:'red',1:'blue'}, resid={0: 'pre', 1: 'mid', 2: 'post'}):
 
@@ -129,12 +128,22 @@ def kde(data, labels, model, n_dir=2, zoom_strength=0, adjust=1, kernel=True, sc
     if n_dir == 1:
         x_min, x_max = np.percentile(first_projections, [0 + zoom_strength, 100 - zoom_strength])
         plt.figure(figsize=(8, 6))
+
         for class_label in np.unique(labels):
             class_projections = first_projections[labels == class_label]
-            plt.hist(class_projections, bins=200, alpha=0.5, label=f'Class {class_label}')
+
+            # Estimate density using Gaussian KDE
+            density = gaussian_kde(class_projections, bw_method='scott')  # You can adjust 'scott' or use 'silverman'
+            x_vals = np.linspace(x_min, x_max, 500)  # Use zoomed range for smoother curves
+            y_vals = density(x_vals)
+
+            # Plot the KDE curve
+            plt.plot(x_vals, y_vals, label=f'Class {class_label}')
+            plt.fill_between(x_vals, y_vals, alpha=0.3, label=None)  # Optional: Fill under the curve
+
         plt.axvline(x=0, color='black', linestyle='--', label='Decision Boundary')
         plt.xlabel('Projection onto LogReg Direction')
-        plt.ylabel('Count')
+        plt.ylabel('Density')
         plt.title('Class Separation Along LogReg Direction')
         plt.xlim(x_min, x_max)
         plt.legend()
