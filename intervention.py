@@ -44,7 +44,8 @@ def mask_top_k_heads(head_accuracies: np.array,
 def set_intervention_hooks(model: HookedTransformer,
                            top_k_head_indices: List[Tuple], 
                            top_k_directions: List[t.Tensor], 
-                           alpha: float = 1
+                           alpha: float = 1,
+                           verbose: bool = False
                            ) -> List:
 
     """
@@ -74,10 +75,11 @@ def set_intervention_hooks(model: HookedTransformer,
     if half:
         # Set half precision for the steering
         model.add_hook(("hook_embed", lambda tensor, hook: tensor.half()))
-
-    print(f"Setting hooks for top {len(top_k_head_indices)} heads:")
+    if verbose:
+        print(f"Setting hooks for top {len(top_k_head_indices)} heads:")
     for (layer, head), direction in zip(top_k_head_indices, top_k_directions):
-        print(f"Layer {layer}, Head {head}, Direction Norm: {direction.norm().item()}")
+        if verbose:
+            print(f"Layer {layer}, Head {head}, Direction Norm: {direction.norm().item()}")
         if half:
             direction = direction.clone().detach().half()
         steering = functools.partial(steering_hook, head_idx=head, head_direction=direction, alpha=alpha)
@@ -89,7 +91,8 @@ def full_intervention(model: HookedTransformer,
                       head_accuracies: np.array, 
                       head_directions: np.array,
                       K: int = 1,
-                      alpha: int = 1) -> HookedTransformer:    
+                      alpha: int = 1,
+                      verbose: bool = False) -> HookedTransformer:    
 
     """
     Full intervention function that sets the hooks for the top K heads and returns the model with the hooks set.
@@ -102,6 +105,38 @@ def full_intervention(model: HookedTransformer,
     top_k_head_indices, top_k_directions = mask_top_k_heads(head_accuracies, head_directions, K)
 
     # Set the intervention hooks for the top K heads
-    model = set_intervention_hooks(model, top_k_head_indices, top_k_directions, alpha)
+    model = set_intervention_hooks(model, top_k_head_indices, top_k_directions, alpha, verbose)
 
     return model
+
+def parameter_sweep(model: HookedTransformer,
+                    tokens: t.Tensor,
+                    head_accuracies,
+                    head_directions,
+                    ks : List = [1, 2, 3, 4, 5],
+                    alphas: List = [0, 0.5, 1, 2, 5], 
+                    metric: str = 'cosine_similarity',
+                    verbose: bool = False
+                    ) -> np.array:
+    
+    metrics = np.zeros((len(ks), len(alphas)))
+
+    model.reset_hooks()
+    clean_logits = model(tokens).squeeze()[-1]
+
+    if metric == 'cosine_similarity':
+
+        cosine_similarities_tot = []
+
+        for k in ks:
+            cosine_similarities_k = []
+            for alpha in alphas:
+                model_with_steering_hooks = full_intervention(model, head_accuracies, head_directions, K=k, alpha=alpha, verbose=verbose)
+            
+                with t.no_grad():
+                    intervened_logits = model_with_steering_hooks(tokens).squeeze()[-1]
+                    cosine_similarity = t.nn.functional.cosine_similarity(clean_logits, intervened_logits, dim=-1).cpu().numpy()
+                    cosine_similarities_k.append(cosine_similarity)
+            cosine_similarities_tot.append(cosine_similarities_k)
+        
+        return cosine_similarities_tot
