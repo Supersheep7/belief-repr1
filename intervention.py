@@ -27,7 +27,7 @@ def mask_top_k_heads(head_accuracies: np.array,
     """
 
     assert head_accuracies.shape == head_directions.shape[:2], "Shape mismatch between head_accuracies and head_directions"
-    assert K <= head_accuracies.size, "K is larger than the number of available heads"
+    assert K <= head_accuracies.numel(), "K is larger than the number of available heads"
 
     # Get the indices of the top K heads
     head_accuracies_flattened = head_accuracies.flatten()
@@ -63,6 +63,7 @@ def set_intervention_hooks(model: HookedTransformer,
         """
         assert head_direction.shape == z.shape[-1:], f"Shape mismatch: {head_direction.shape} vs {z.shape[-1:]}"
         # Steer only the d_head corresponding to the given head_index
+        
         z[:, :, head_idx, :] += alpha * head_direction
 
         return z
@@ -93,7 +94,10 @@ def full_intervention(model: HookedTransformer,
     """
     Full intervention function that sets the hooks for the top K heads and returns the model with the hooks set.
     """
-    
+    # Force everything into tensors
+    head_accuracies = t.tensor(head_accuracies)
+    head_directions = t.tensor(head_directions)
+
     # Get the top K heads and their directions
     top_k_head_indices, top_k_directions = mask_top_k_heads(head_accuracies, head_directions, K)
 
