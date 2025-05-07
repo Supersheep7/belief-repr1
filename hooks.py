@@ -64,6 +64,7 @@ def steering_hook(
     steering_coefficient: float,
     last_token: True
 ) -> t.Tensor:
+    
     """
     Steers the model by returning a modified activations tensor, with some multiple of the steering vector added to all
     sequence positions.
