@@ -79,6 +79,7 @@ class Probe(object):
         self.test_loader = None
         self.direction = None
         self.covariance = None
+        self.std = None
 
     def initialize_direction(self):
         if self.supervision_type == 'S':
@@ -255,12 +256,27 @@ class Probe(object):
             pickle.dump(self.best_probe, f)
         print(f"Best probe saved to {filename}")
 
-    def get_direction(self
+    def get_direction(self,
+                      std: bool = False
         ) -> t.Tensor:
         '''
         For steering. TBD
         '''
+        if std: 
+            self.std = self.get_std()
+            return self.std @ self.direction
+
         return self.direction
+    
+    def get_std(self) -> t.Tensor:
+        '''
+        For steering.
+        '''
+        full_dataset = t.cat([self.x0_train, self.x1_train, self.x0_test, self.x1_test], dim=0) if self.supervision_type == "U" else t.cat([self.x, self.X_test], dim=0) 
+        project_on_direction = full_dataset @ self.direction
+        self.std = project_on_direction.std(dim=0, keepdim=True)
+
+        return self.std
 
 class SupervisedProbe(Probe):
 
@@ -395,7 +411,7 @@ def probe_sweep(list_of_datasets: List,
                                     probe_config=probe_config)
         probe.repeated_train()
         accuracies.append(probe.get_acc())
-        directions.append(probe.get_direction())
+        directions.append(probe.get_direction(std=True))
         best_probes.append(probe.best_probe)
 
     return (accuracies, directions, best_probes)
