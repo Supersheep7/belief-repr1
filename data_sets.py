@@ -41,7 +41,7 @@ class ITIBuilder():
     if dataset_name == "tqa_mc2":
         self.dataset = load_dataset("truthfulqa/truthful_qa", "multiple_choice")['validation']
     elif dataset_name == "tqa_gen":
-        self.dataset = load_dataset("truthfulqa/truthful_qa", 'generation')['validation']
+        self.dataset = load_dataset("truthfulqa/truthful_qa", 'generation')
     elif dataset_name == 'tqa_gen_end_q':
         self.dataset = load_dataset("truthfulqa/truthful_qa", 'generation')['validation']
     else:

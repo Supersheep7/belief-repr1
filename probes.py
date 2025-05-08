@@ -58,7 +58,7 @@ class Probe(object):
         # probe config
         self.var_normalize = probe_config.var_normalize
         self.dropout = probe_config.dropout
-        self.with_direction = probe_config.with_direction
+        self.direction_type = probe_config.direction_type
         self.seed = probe_config.seed
         self.nepochs = probe_config.nepochs
         self.ntries = probe_config.ntries
@@ -81,23 +81,26 @@ class Probe(object):
         self.covariance = None
         self.std = None
 
-    def initialize_direction(self):
-        if self.supervision_type == 'S':
-            # Compute direction from data if supervised
-            acts = t.tensor(self.x, dtype=t.float, requires_grad=True, device=self.device)
-            labels = t.tensor(self.labels_train, dtype=t.float, requires_grad=True, device=self.device)
-            pos_acts, neg_acts = acts[labels == 1], acts[labels == 0]
-        else:
-            # Otherwise, direction and covariance will be computed from contrast pairs
-            x0 = t.tensor(self.x0, dtype=t.float, requires_grad=True, device=self.device)
-            x1 = t.tensor(self.x1, dtype=t.float, requires_grad=True, device=self.device)
-            pos_acts, neg_acts = x0, x1
-        pos_mean, neg_mean = pos_acts.mean(0), neg_acts.mean(0)
-        self.direction = nn.Parameter(pos_mean - neg_mean, requires_grad=True)
-        # Compute covariance if we use mmp
-        if self.probe_type == 'mmp':
+    def initialize_direction(self, direction_type):
+        
+        if direction_type == 'mmp':
+            """
+            We take the mass mean of positive and negative activations and subtract them to get the direction.
+            """
+            whole_dataset = t.cat([t.tensor(self.x, dtype=t.float, requires_grad=True, device=self.device),
+                                    t.tensor(self.X_test, dtype=t.float, requires_grad=True, device=self.device)], dim=0)
+            labels = t.cat([t.tensor(self.labels_train, dtype=t.float, requires_grad=True, device=self.device),
+                            t.tensor(self.labels_test, dtype=t.float, requires_grad=True, device=self.device)], dim=0)
+            pos_acts, neg_acts = whole_dataset[labels == 1], whole_dataset[labels == 0]
+            pos_mean, neg_mean = pos_acts.mean(0), neg_acts.mean(0)
+            self.direction = nn.Parameter(pos_mean - neg_mean, requires_grad=True)
             centered_data = t.cat([pos_acts - pos_mean, neg_acts - neg_mean], 0)
             self.covariance = centered_data.t() @ centered_data / centered_data.shape[0]
+        else:
+            coefficients = self.best_probe.coef_[0] if direction_type == 'linear' else self.best_probe.weight[0].cpu().numpy()
+            intercept = self.best_probe.intercept_[0] if direction_type == 'linear' else self.best_probe.bias[0].cpu().numpy()
+            theta = np.hstack([intercept, coefficients])
+            self.direction = nn.Parameter(t.tensor(theta, dtype=t.float, requires_grad=True, device=self.device).squeeze(0))
 
     def initialize_probe(self):
 
@@ -105,8 +108,9 @@ class Probe(object):
         Initializes the probe. If self.with_direction, also initializes the direction and covariance matrix.
         """
 
-        if self.with_direction or self.probe_type == 'mmp':
-            self.initialize_direction()
+        if self.probe_type == "mmp":
+            # We need the direction and covariance in advance for the MMP probe 
+            self.initialize_direction('mmp')
 
         if self.probe_type == "linear":
             self.x = np.array(self.x.detach().cpu())
@@ -139,7 +143,7 @@ class Probe(object):
 
             if self.probe_type == "linear_layer":
                 self.probe = nn.Sequential(
-                    nn.Linear(self.input_dim, 1, bias=False),
+                    nn.Linear(self.input_dim, 1, bias=True),
                     nn.Sigmoid()
                 )
             if self.probe_type == "mmp":
@@ -260,11 +264,14 @@ class Probe(object):
                       std: bool = False
         ) -> t.Tensor:
         '''
-        For steering. TBD
+        Gets the chosen direction for steering. 
         '''
+        self.initialize_direction(self.direction_type)
+        direction = self.direction.clone().detach()
+
         if std: 
-            self.std = self.get_std()
-            return self.std @ self.direction
+            std = self.get_std()
+            return std @ direction
 
         return self.direction
     
@@ -272,7 +279,19 @@ class Probe(object):
         '''
         For steering.
         '''
-        full_dataset = t.cat([self.x0_train, self.x1_train, self.x0_test, self.x1_test], dim=0) if self.supervision_type == "U" else t.cat([self.x, self.X_test], dim=0) 
+        if self.supervision_type == "S":
+            # If data is npt, convert to torch tensor
+            if not isinstance(self.x, t.Tensor):
+                self.x = t.tensor(self.x, dtype=t.float, device=self.device)
+                self.X_test = t.tensor(self.X_test, dtype=t.float, device=self.device)
+            full_dataset = t.cat([self.x, self.X_test], dim=0)
+        else:
+            if not isinstance(self.x0_train, t.Tensor):
+                self.x0_train = t.tensor(self.x0_train, dtype=t.float, device=self.device)
+                self.x1_train = t.tensor(self.x1_train, dtype=t.float, device=self.device)
+                self.x0_test = t.tensor(self.x0_test, dtype=t.float, device=self.device)
+                self.x1_test = t.tensor(self.x1_test, dtype=t.float, device=self.device)
+            full_dataset = t.cat([self.x0_train, self.x1_train, self.x0_test, self.x1_test], dim=0)
         project_on_direction = full_dataset @ self.direction
         self.std = project_on_direction.std(dim=0, keepdim=True)
 
@@ -290,7 +309,7 @@ class SupervisedProbe(Probe):
         super().__init__(probe_config=probe_config)
         self.input_dim = x_train.shape[-1]
         self.supervision_type = "S"
-        self.x, self.X_test = self.normalize(x_train, x_test)
+        self.x, self.X_test = self.normalize(x_train, x_test) if self.var_normalize else (x_train, x_test)
         self.labels_train = labels_train
         self.labels_test = labels_test
 
@@ -346,7 +365,7 @@ class UnsupervisedProbe(Probe):
         self.x1_train, self.x1_test = self.normalize(x1_train, x1_test)
         self.labels = labels
         self.supervision_type = "U"
-        assert probe_config.probe_type != "linear", ("You shouldn't call sklearn's LogisticRegression for an Unsupervised Probe")
+        assert probe_config.probe_type not in ["linear", "mmp"], ("You should call linear_layer or mlp for an Unsupervised Probe")
 
     def get_loss(self, p0, p1):
         """
@@ -397,7 +416,7 @@ def probe_sweep(list_of_datasets: List,
 
         if probe_config.supervision == "S":
             dataset = einops.rearrange(dataset, 'n b d -> (n b) d')
-            X_train, X_test, y_train, y_test = train_test_split(dataset, labels, test_size=0.2, random_state=probe_config.seed)
+            X_train, X_test, y_train, y_test = train_test_split(dataset, labels, test_size=probe_config.test_size, random_state=probe_config.seed)
             probe = SupervisedProbe(x_train=X_train, labels_train=y_train,
                                     x_test=X_test, labels_test=y_test,
                                     probe_config=probe_config)
@@ -405,7 +424,7 @@ def probe_sweep(list_of_datasets: List,
             x0, x1 = dataset[0], dataset[1]
             x0 = einops.rearrange(x0, 'n b d -> (n b) d')
             x1 = einops.rearrange(x1, 'n b d -> (n b) d')
-            x0_train, x0_test, x1_train, x1_test, _, y_test = train_test_split(x0, x1, labels, test_size=0.2, random_state=probe_config.seed)
+            x0_train, x0_test, x1_train, x1_test, _, y_test = train_test_split(x0, x1, labels, test_size=probe_config.test_size, random_state=probe_config.seed)
             probe = UnsupervisedProbe(x0_train=x0_train, x1_train=x1_train,
                                     x0_test=x0_test, x1_test=x1_test, labels=y_test,
                                     probe_config=probe_config)
