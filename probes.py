@@ -53,24 +53,24 @@ class MLPProbe(nn.Module):
 
 class Probe(object):
 
-    def __init__(self, probe_config):
+    def __init__(self, probe_cfg):
 
         # probe config
-        self.var_normalize = probe_config.var_normalize
-        self.dropout = probe_config.dropout
-        self.direction_type = probe_config.direction_type
-        self.seed = probe_config.seed
-        self.nepochs = probe_config.nepochs
-        self.ntries = probe_config.ntries
-        self.lr = probe_config.lr
-        self.verbose = probe_config.verbose
-        self.device = probe_config.device
-        self.batch_size = probe_config.batch_size
-        self.weight_decay = probe_config.weight_decay
-        self.max_iter = probe_config.max_iter
-        self.C = probe_config.C
-        self.probe_type = probe_config.probe_type
-        self.control = probe_config.control
+        self.var_normalize = probe_cfg.var_normalize
+        self.dropout = probe_cfg.dropout
+        self.direction_type = probe_cfg.direction_type
+        self.seed = probe_cfg.seed
+        self.nepochs = probe_cfg.nepochs
+        self.ntries = probe_cfg.ntries
+        self.lr = probe_cfg.lr
+        self.verbose = probe_cfg.verbose
+        self.device = probe_cfg.device
+        self.batch_size = probe_cfg.batch_size
+        self.weight_decay = probe_cfg.weight_decay
+        self.max_iter = probe_cfg.max_iter
+        self.C = probe_cfg.C
+        self.probe_type = probe_cfg.probe_type
+        self.control = probe_cfg.control
 
         # probe
         self.probe = None
@@ -302,9 +302,9 @@ class SupervisedProbe(Probe):
                  x_test: Float[t.Tensor, "n_data d_activation"],
                  labels_train: Float[t.Tensor, "n_data"],
                  labels_test: Float[t.Tensor, "n_data"],
-                 probe_config
+                 probe_cfg
                  ):
-        super().__init__(probe_config=probe_config)
+        super().__init__(probe_cfg=probe_cfg)
         self.input_dim = x_train.shape[-1]
         self.supervision_type = "S"
         self.x, self.X_test = self.normalize(x_train, x_test) if self.var_normalize else (x_train, x_test)
@@ -355,15 +355,15 @@ class UnsupervisedProbe(Probe):
                  x1_train: Float[t.Tensor, "n_batch batch_size d_activation"],
                  x1_test: Float[t.Tensor, "n_batch batch_size d_activation"],
                  labels: Float[t.Tensor, "n_batch batch_size"],
-                 probe_config
+                 probe_cfg
                  ):
-        super().__init__(probe_config=probe_config)
+        super().__init__(probe_cfg=probe_cfg)
         self.input_dim = x0_train.shape[-1]
         self.x0_train, self.x0_test = self.normalize(x0_train, x0_test)
         self.x1_train, self.x1_test = self.normalize(x1_train, x1_test)
         self.labels = labels
         self.supervision_type = "U"
-        assert probe_config.probe_type not in ["linear", "mmp"], ("You should call linear_layer or mlp for an Unsupervised Probe")
+        assert probe_cfg.probe_type not in ["linear", "mmp"], ("You should call linear_layer or mlp for an Unsupervised Probe")
 
     def get_loss(self, p0, p1):
         """
@@ -391,7 +391,7 @@ class UnsupervisedProbe(Probe):
 
 def probe_sweep(list_of_datasets: List,
                 labels: t.Tensor,
-                probe_config,
+                probe_cfg,
                 ) -> Tuple:
     '''
     Runs a probe sweep on a list of activations
@@ -399,7 +399,7 @@ def probe_sweep(list_of_datasets: List,
     Takes:
         list: a list of activations (if supervised); a list of tuples (activations0, activations1)
         labels: a tensor of labels of shape = list[0].shape (supervised) or list['pos'][0].shape
-        probe_config: config object for the probe
+        probe_cfg: config object for the probe
 
     Returns: a list of accuracies for the list of activations; a list of vectors for steering; a list of best_probes for keeping them
     '''
@@ -410,23 +410,23 @@ def probe_sweep(list_of_datasets: List,
 
     for dataset in list_of_datasets:
 
-        if probe_config.supervision == "S":
+        if probe_cfg.supervision == "S":
             dataset = einops.rearrange(dataset, 'n b d -> (n b) d')
-            X_train, X_test, y_train, y_test = train_test_split(dataset, labels, test_size=probe_config.test_size, random_state=probe_config.seed)
+            X_train, X_test, y_train, y_test = train_test_split(dataset, labels, test_size=probe_cfg.test_size, random_state=probe_cfg.seed)
             probe = SupervisedProbe(x_train=X_train, labels_train=y_train,
                                     x_test=X_test, labels_test=y_test,
-                                    probe_config=probe_config)
+                                    probe_cfg=probe_cfg)
         else:
             x0, x1 = dataset[0], dataset[1]
             x0 = einops.rearrange(x0, 'n b d -> (n b) d')
             x1 = einops.rearrange(x1, 'n b d -> (n b) d')
-            x0_train, x0_test, x1_train, x1_test, _, y_test = train_test_split(x0, x1, labels, test_size=probe_config.test_size, random_state=probe_config.seed)
+            x0_train, x0_test, x1_train, x1_test, _, y_test = train_test_split(x0, x1, labels, test_size=probe_cfg.test_size, random_state=probe_cfg.seed)
             probe = UnsupervisedProbe(x0_train=x0_train, x1_train=x1_train,
                                     x0_test=x0_test, x1_test=x1_test, labels=y_test,
-                                    probe_config=probe_config)
+                                    probe_cfg=probe_cfg)
         probe.repeated_train()
         accuracies.append(probe.get_acc())
-        directions.append(probe.get_direction(std=probe_config.with_std))
+        directions.append(probe.get_direction(std=probe_cfg.with_std))
         best_probes.append(probe.best_probe)
 
     return (accuracies, directions, best_probes)
