@@ -87,10 +87,13 @@ class Probe(object):
             """
             We take the mass mean of positive and negative activations and subtract them to get the direction.
             """
-            whole_dataset = t.cat([t.tensor(self.x, dtype=t.float, requires_grad=True, device=self.device),
-                                    t.tensor(self.X_test, dtype=t.float, requires_grad=True, device=self.device)], dim=0)
-            labels = t.cat([t.tensor(self.labels_train, dtype=t.float, requires_grad=True, device=self.device),
-                            t.tensor(self.labels_test, dtype=t.float, requires_grad=True, device=self.device)], dim=0)
+            if not isinstance(self.x, t.Tensor):
+                x_train = t.tensor(self.x, dtype=t.float, device=self.device) if not isinstance(self.x, t.Tensor) else self.x
+                x_test = t.tensor(self.X_test, dtype=t.float, device=self.device) if not isinstance(self.x, t.Tensor) else self.X_test
+                y_train = t.tensor(self.labels_train, dtype=t.float, device=self.device) if not isinstance(self.x, t.Tensor) else self.labels_train
+                y_test = t.tensor(self.labels_test, dtype=t.float, device=self.device) if not isinstance(self.x, t.Tensor) else self.labels_test
+            whole_dataset = t.cat([x_train, x_test], dim=0)
+            labels = t.cat([y_train, y_test], dim=0)
             pos_acts, neg_acts = whole_dataset[labels == 1], whole_dataset[labels == 0]
             pos_mean, neg_mean = pos_acts.mean(0), neg_acts.mean(0)
             self.direction = nn.Parameter(pos_mean - neg_mean, requires_grad=True)
