@@ -97,16 +97,11 @@ class Probe(object):
             centered_data = t.cat([pos_acts - pos_mean, neg_acts - neg_mean], 0)
             self.covariance = centered_data.t() @ centered_data / centered_data.shape[0]
         else:
-            coefficients = self.best_probe.coef_[0] if direction_type == 'linear' else self.best_probe.weight[0].cpu().numpy()
-            intercept = self.best_probe.intercept_[0] if direction_type == 'linear' else self.best_probe.bias[0].cpu().numpy()
-            theta = np.hstack([intercept, coefficients])
-            self.direction = nn.Parameter(t.tensor(theta, dtype=t.float, requires_grad=True, device=self.device).squeeze(0))
+            with t.no_grad():
+              theta = self.best_probe.coef_[0] if direction_type == 'logistic' else self.best_probe[0].weight[0].cpu().numpy()
+              self.direction = nn.Parameter(t.tensor(theta, dtype=t.float, requires_grad=True, device=self.device).squeeze(0))
 
     def initialize_probe(self):
-
-        """
-        Initializes the probe. If self.with_direction, also initializes the direction and covariance matrix.
-        """
 
         if self.probe_type == "mmp":
             # We need the direction and covariance in advance for the MMP probe 
@@ -271,7 +266,7 @@ class Probe(object):
 
         if std: 
             std = self.get_std()
-            return std @ direction
+            return std * direction
 
         return self.direction
     
@@ -384,10 +379,8 @@ class UnsupervisedProbe(Probe):
         y_test = self.labels.clone().detach()
         with t.no_grad():
             p0, p1 = self.best_probe(x0_test), self.best_probe(x1_test)
-        '''Test below'''
         avg_confidence = 0.5*(p0 + (1-p1))
         predictions = (avg_confidence.detach().cpu().numpy() < 0.5).astype(int)[:, 0]
-        '''Test above'''
         acc = (predictions == y_test.cpu().numpy()).mean()
         acc = max(acc, 1 - acc)
 
@@ -430,7 +423,7 @@ def probe_sweep(list_of_datasets: List,
                                     probe_config=probe_config)
         probe.repeated_train()
         accuracies.append(probe.get_acc())
-        directions.append(probe.get_direction(std=True))
+        directions.append(probe.get_direction(std=probe_config.with_std))
         best_probes.append(probe.best_probe)
 
     return (accuracies, directions, best_probes)
