@@ -11,6 +11,7 @@ from jaxtyping import Float, Int
 from typing import List, Tuple, Dict
 import numpy as np 
 import functools
+import pandas as pd
 
 def mask_top_k_heads(head_accuracies: np.array, 
                      head_directions: np.array, 
@@ -110,11 +111,11 @@ def full_intervention(model: HookedTransformer,
     return model
 
 def parameter_sweep(model: HookedTransformer,
-                    tokens: t.Tensor,
+                    tokens: t.Tensor,               
                     head_accuracies,
                     head_directions,
                     ks : List = [1, 2, 3, 4, 5],
-                    alphas: List = [0, 0.5, 1, 2, 5], 
+                    alphas: List = [1, 2, 3, 4, 5], 
                     metric: str = 'cosine',
                     verbose: bool = False
                     ) -> np.array:
@@ -129,7 +130,12 @@ def parameter_sweep(model: HookedTransformer,
         for num_alpha, alpha in enumerate(alphas):
             model_with_steering_hooks = full_intervention(model, head_accuracies, head_directions, K=k, alpha=alpha, verbose=verbose)
             with t.no_grad():
-                if metric != 'judge':
+
+                if metric == 'judge':
+                    metrics[num_k, num_alpha] = gptj_eval(model, model_with_steering_hooks, tokens).cpu().numpy()
+                elif metric == 'mc':
+                    metrics[num_k, num_alpha] = get_mc_acc(model, model_with_steering_hooks, tokens).cpu().numpy()
+                else:
                     intervened_logits = model_with_steering_hooks(tokens).squeeze()[-1]
                     intervened_logprobs = t.nn.functional.softmax(intervened_logits, dim=-1)
                     if metric == 'cosine':
@@ -143,3 +149,27 @@ def parameter_sweep(model: HookedTransformer,
                         metrics[num_k, num_alpha] = ce
     
     return metrics
+
+def get_mc_acc(model: HookedTransformer, 
+              model_with_steering_hooks: HookedTransformer,
+              tokens: t.Tensor,
+              tqa_dataset: pd.DataFrame,
+              ) -> float:
+
+    # TO DO: generate answer and check it against the dataset 
+    metric = None
+
+    return metric
+
+def gptj_eval(model: HookedTransformer, 
+              model_with_steering_hooks: HookedTransformer,
+              tokens: t.Tensor
+              ) -> float:
+
+    metric = None
+    # TO DO: generate autoregressive answer
+    # TO DO: get GPT-J score for the generated answer 
+    # TO DO: scale the score by the informativeness of the answer 
+    # QUESTION: do we need the dataset for this?
+
+    return metric
