@@ -98,8 +98,8 @@ def full_intervention(model: HookedTransformer,
     Full intervention function that sets the hooks for the top K heads and returns the model with the hooks set.
     """
     # Force everything into tensors
-    head_accuracies = t.tensor(head_accuracies)
-    head_directions = t.tensor(head_directions)
+    head_accuracies = t.as_tensor(head_accuracies)
+    head_directions = t.as_tensor(head_directions)
 
     # Get the top K heads and their directions
     top_k_head_indices, top_k_directions = mask_top_k_heads(head_accuracies, head_directions, K)
@@ -115,7 +115,7 @@ def parameter_sweep(model: HookedTransformer,
                     head_directions,
                     ks : List = [1, 2, 3, 4, 5],
                     alphas: List = [0, 0.5, 1, 2, 5], 
-                    metric: str = 'cosine_similarity',
+                    metric: str = 'cosine',
                     verbose: bool = False
                     ) -> np.array:
     
@@ -123,20 +123,23 @@ def parameter_sweep(model: HookedTransformer,
 
     model.reset_hooks()
     clean_logits = model(tokens).squeeze()[-1]
+    clean_logprobs = t.nn.functional.softmax(clean_logits, dim=-1)
 
-    if metric == 'cosine_similarity':
-
-        cosine_similarities_tot = []
-
-        for k in ks:
-            cosine_similarities_k = []
-            for alpha in alphas:
-                model_with_steering_hooks = full_intervention(model, head_accuracies, head_directions, K=k, alpha=alpha, verbose=verbose)
-            
-                with t.no_grad():
+    for num_k, k in enumerate(ks):
+        for num_alpha, alpha in enumerate(alphas):
+            model_with_steering_hooks = full_intervention(model, head_accuracies, head_directions, K=k, alpha=alpha, verbose=verbose)
+            with t.no_grad():
+                if metric != 'judge':
                     intervened_logits = model_with_steering_hooks(tokens).squeeze()[-1]
-                    cosine_similarity = t.nn.functional.cosine_similarity(clean_logits, intervened_logits, dim=-1).cpu().numpy()
-                    cosine_similarities_k.append(cosine_similarity)
-            cosine_similarities_tot.append(cosine_similarities_k)
-        
-        return cosine_similarities_tot
+                    intervened_logprobs = t.nn.functional.softmax(intervened_logits, dim=-1)
+                    if metric == 'cosine':
+                        cosine_similarity = t.nn.functional.cosine_similarity(clean_logits, intervened_logits, dim=-1).cpu().numpy()
+                        metrics[num_k, num_alpha] = cosine_similarity
+                    elif metric == 'kl':
+                        kl_divergence = t.nn.functional.kl_div(clean_logprobs, intervened_logprobs, reduction='batchmean').cpu().numpy()
+                        metrics[num_k, num_alpha] = kl_divergence
+                    elif metric == 'ce':
+                        ce = t.nn.functional.cross_entropy(clean_logprobs, intervened_logprobs, reduction='mean').cpu().numpy()
+                        metrics[num_k, num_alpha] = ce
+    
+    return metrics
