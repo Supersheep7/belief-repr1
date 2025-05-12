@@ -1,6 +1,7 @@
 
 import torch as t
 import torch.nn as nn
+from sklearn.model_selection import train_test_split
 import einops
 from fancy_einsum import einsum
 import tqdm.auto as tqdm
@@ -17,6 +18,9 @@ from typing import List, Tuple, Dict
 import numpy as np 
 from torch.amp import autocast
 from tqdm import tqdm
+from datasets import Dataset
+from transformers import TrainingArguments, Trainer, EarlyStoppingCallback
+
 
 
 def decompose_mha(mha_batch: Float[t.Tensor, "n_batch batch_size n_head d_head"]
@@ -343,10 +347,67 @@ class ActivationExtractor():
         for batch in tqdm(self.X, "Processing"):
             self.extract_activations_batch(batch, self.model)
         return self.activations, self.y
+
+def finetune_model(model, tokenizer, data):
+    # Tokenizing the data
+    tokenized_data = data.apply(
+        lambda row: tokenizer(
+            row['Question'],                        # Column name based on TQA
+            text_target=row['Correct Answers'],     # Column name based on TQA
+            truncation=True, 
+            max_length=512, 
+            padding='max_length', 
+            return_tensors='pt'  
+        ),
+        axis=1
+    )
+
+    # Convert the tokenized data into a format suitable for Hugging Face Trainer
+    def convert_to_dataset(tokenized_data):
+        input_ids = [x['input_ids'].squeeze(0) for x in tokenized_data]
+        attention_mask = [x['attention_mask'].squeeze(0) for x in tokenized_data]
+        labels = [x['input_ids'].squeeze(0) for x in tokenized_data]  # Assuming labels are the same as input_ids for a seq2seq task
+        
+        return Dataset.from_dict({
+            'input_ids': input_ids,
+            'attention_mask': attention_mask,
+            'labels': labels
+        })
+
+    train_data, test_data = train_test_split(tokenized_data, test_size=0.2, random_state=42)
+
+    # Convert tokenized data into Dataset format
+    train_dataset = convert_to_dataset(train_data)
+    eval_dataset = convert_to_dataset(test_data)
+
+    # Training arguments
+    training_args = TrainingArguments(
+        output_dir="output_dir",
+        evaluation_strategy="steps",
+        eval_steps=50,  
+        learning_rate=3e-5, 
+        per_device_train_batch_size=2,
+        num_train_epochs=10,
+        save_steps=100,
+        save_total_limit=2,
+        logging_dir="logs",
+        logging_steps=10,
+        load_best_model_at_end=True,  
+        weight_decay=0.01,
+        report_to="none",  
+    )
+
+    # Trainer setup
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        tokenizer=tokenizer,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
+    )
     
-class SteeredExtractor():
-    def __init__(self):
-        pass
-    '''
-    TBD
-    '''
+    # Train the model
+    trainer.train()
+
+    return model, tokenizer
