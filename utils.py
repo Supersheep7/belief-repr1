@@ -1,6 +1,6 @@
 
 import torch as t
-import torch.nn as nn
+from torch.utils.data import DataLoader, Dataset
 from sklearn.model_selection import train_test_split
 import einops
 from fancy_einsum import einsum
@@ -348,66 +348,50 @@ class ActivationExtractor():
             self.extract_activations_batch(batch, self.model)
         return self.activations, self.y
 
-def finetune_model(model, tokenizer, data):
-    # Tokenizing the data
-    tokenized_data = data.apply(
-        lambda row: tokenizer(
-            row['Question'],                        # Column name based on TQA
-            text_target=row['Correct Answers'],     # Column name based on TQA
-            truncation=True, 
-            max_length=512, 
-            padding='max_length', 
-            return_tensors='pt'  
-        ),
-        axis=1
-    )
+class Seq2SeqDataset(Dataset):
+    def __init__(self, df, input_col, target_col, tokenizer, max_len=128):
+        self.input_texts = df[input_col].tolist()
+        self.target_texts = df[target_col].tolist()
+        self.tokenizer = tokenizer
+        self.max_len = max_len
 
-    # Convert the tokenized data into a format suitable for Hugging Face Trainer
-    def convert_to_dataset(tokenized_data):
-        input_ids = [x['input_ids'].squeeze(0) for x in tokenized_data]
-        attention_mask = [x['attention_mask'].squeeze(0) for x in tokenized_data]
-        labels = [x['input_ids'].squeeze(0) for x in tokenized_data]  # Assuming labels are the same as input_ids for a seq2seq task
-        
-        return Dataset.from_dict({
-            'input_ids': input_ids,
-            'attention_mask': attention_mask,
-            'labels': labels
-        })
+    def __len__(self):
+        return len(self.input_texts)
 
-    train_data, test_data = train_test_split(tokenized_data, test_size=0.2, random_state=42)
+    def __getitem__(self, idx):
+        input_tokens = self.tokenizer(self.input_texts[idx], max_length=self.max_len, padding="max_length", truncation=True, return_tensors="pt")
+        target_tokens = self.tokenizer(self.target_texts[idx], max_length=self.max_len, padding="max_length", truncation=True, return_tensors="pt")
+        return input_tokens['input_ids'].squeeze(0), target_tokens['input_ids'].squeeze(0)
 
-    # Convert tokenized data into Dataset format
-    train_dataset = convert_to_dataset(train_data)
-    eval_dataset = convert_to_dataset(test_data)
+def finetune_model(model, df, input_col, target_col, epochs=3, batch_size=16, lr=1e-5, max_len=128):
+    dataset = Seq2SeqDataset(df, input_col, target_col, model.tokenizer, max_len)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-    # Training arguments
-    training_args = TrainingArguments(
-        output_dir="output_dir",
-        evaluation_strategy="steps",
-        eval_steps=50,  
-        learning_rate=3e-5, 
-        per_device_train_batch_size=2,
-        num_train_epochs=10,
-        save_steps=100,
-        save_total_limit=2,
-        logging_dir="logs",
-        logging_steps=10,
-        load_best_model_at_end=True,  
-        weight_decay=0.01,
-        report_to="none",  
-    )
+    optimizer = t.optim.AdamW(model.parameters(), lr=lr)
+    criterion = t.nn.CrossEntropyLoss(ignore_index=model.tokenizer.pad_token_id)
 
-    # Trainer setup
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        tokenizer=tokenizer,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
-    )
-    
-    # Train the model
-    trainer.train()
+    for epoch in range(epochs):
+        model.train()
+        epoch_loss = 0
+        for batch_idx, (input_ids, target_ids) in enumerate(dataloader):
+            input_ids, target_ids = input_ids.cuda(), target_ids.cuda()
 
-    return model, tokenizer
+            # Forward pass
+            optimizer.zero_grad()
+            logits = model(input_ids)
+
+            # Shift target tokens for teacher forcing
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = target_ids[..., 1:].contiguous()
+
+            loss = criterion(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+            epoch_loss += loss.item()
+
+            # Backward pass and optimization
+            loss.backward()
+            optimizer.step()
+
+        print(f"Epoch {epoch+1}/{epochs}, Loss: {epoch_loss/len(dataloader):.4f}")
+
+    print("Fine-tuning complete.")
+    return model
