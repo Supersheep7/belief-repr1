@@ -11,14 +11,18 @@ import pandas as pd
 from matplotlib.colors import Normalize
 from matplotlib import cm
 from scipy.stats import gaussian_kde
+from matplotlib import colors 
 
-def mass_plot(labels, layers, heads=None, streams=None, color_map={0:'red',1:'blue'}, resid={0: 'pre', 1: 'mid', 2: 'post'}):
+def mass_plot(labels, heads=None, streams=None, color_map={0:'red', 1:'blue'}, resid={0: 'pre', 1: 'mid', 2: 'post'}):
 
-    if heads:
+    layers = len(heads) if heads else len(next(streams.values()))
+
+    if heads is not None:
         heads_per_layer = len(heads[0])  # Number of heads per layer
 
         # Set up the grid of subplots
         fig, axes = plt.subplots(layers, heads_per_layer, figsize=(heads_per_layer * 4, layers * 4))
+        plt.subplots_adjust(hspace=0.5)
 
         for i, layer in tqdm(enumerate(heads), desc="Processing layers"):
             for j, head in enumerate(layer):
@@ -28,28 +32,35 @@ def mass_plot(labels, layers, heads=None, streams=None, color_map={0:'red',1:'bl
                 # Reshape tensor to 2D: (n_samples, -1)
                 reshaped_tensor = einops.rearrange(head, 'n_batch batch_size d_head -> (n_batch batch_size) d_head')
                 reshaped_labels = einops.rearrange(labels, 'n_batch batch_size -> (n_batch batch_size)')
-
                 # Apply PCA to the current tensor
                 pca = PCA(n_components=2)
-                pca_transformed = pca.fit_transform(reshaped_tensor)
-
+                pca_transformed = pca.fit_transform(reshaped_tensor.cpu())
                 # Color coding
                 colors = [color_map[int(label)] for label in reshaped_labels]
 
                 # Plot the PCA result for this tensor
                 scatter = ax.scatter(
-                    pca_transformed[:, 0], pca_transformed[:, 1],
-                    c=colors, alpha=0.7
-                )
+                                    pca_transformed[:, 0], 
+                                    pca_transformed[:, 1],
+                                    c=colors, 
+                                    alpha=0.8, 
+                                    edgecolor='k', 
+                                    linewidths=0.5,
+                                    s=50  # Adjust the marker size
+                                )
 
                 # Customize the subplot
-                ax.set_title(f"Layer {i}, Head {j}")
+                ax.set_title(f"Layer {i}, Head {j}", fontsize=14)
+                ax.set_xlabel("Principal Component 1", fontsize=12)
+                ax.set_ylabel("Principal Component 2", fontsize=12)
+                ax.grid(True, linestyle='--', alpha=0.6)
 
-    elif streams:
+
+    elif streams is not None:
         residual_types = len(resid.items())
 
         # Set up the grid of subplots
-        fig, axes = plt.subplots(residual_types, layers, figsize=(layers * 4, residual_types * 4))
+        fig, axes = plt.subplots(residual_types, layers, figsize=(layers * 4, residual_types * 4))        
 
         for i, act in tqdm(enumerate(streams.values()), desc="Processing activations"):
             # Determine the subplot's row and column indices
@@ -64,21 +75,26 @@ def mass_plot(labels, layers, heads=None, streams=None, color_map={0:'red',1:'bl
 
             # Apply PCA to the current tensor
             pca = PCA(n_components=2)
-            pca_transformed = pca.fit_transform(reshaped_tensor)
+            pca_transformed = pca.fit_transform(reshaped_tensor.cpu())
 
             colors = [color_map[int(label)] for label in reshaped_labels]
 
             # Plot the PCA result for this tensor
             scatter = ax.scatter(
-                pca_transformed[:, 0], pca_transformed[:, 1],
-                c=colors, alpha=0.7
-            )
+                                pca_transformed[:, 0], 
+                                pca_transformed[:, 1],
+                                c=colors, 
+                                alpha=0.8, 
+                                edgecolor='k', 
+                                linewidths=0.5,
+                                s=50  # Adjust the marker size
+                            )
 
             # Customize the subplot
-            ax.set_title(f"Residual {resid[resid_type]}, Layer {resid_layer}")
-            ax.set_xlabel("PC 1")
-            ax.set_ylabel("PC 2")
-
+            ax.set_title(f"Residual {resid[resid_type]}, Layer {resid_layer}", fontsize=14, fontweight='bold')
+            ax.set_xlabel("Principal Component 1", fontsize=12)
+            ax.set_ylabel("Principal Component 2", fontsize=12)
+            ax.grid(True, linestyle='--', alpha=0.6)
     plt.tight_layout()
     plt.show()
 
@@ -200,3 +216,98 @@ def kde(data, labels, model, n_dir=2, zoom_strength=0, adjust=1, kernel=True, sc
         plt.show()
 
     return
+
+def pretty_line(x, x1=None, title="DummyTitle", x_axis="DummyXaxis", y_axis="DummyYaxis", x_label="DummyXLabel", y_label="DummyYLabel"):
+
+    fig, ax = plt.subplots(figsize=(12, 8), facecolor='w')
+    ax.set_facecolor('#e0e0e0') 
+    ax.plot(x, color='#007acc', alpha=0.7, marker='o', markersize=8, linewidth=2.5, label=x_label)
+    if x1 is not None:
+        ax.plot(x1, color='#d62728', alpha=0.7, marker='o', markersize=8, linewidth=2.5,
+                label=y_label)
+    ax.set_title(title,
+                fontsize=18, pad=20, weight='bold', color='#333333')
+    ax.set_xlabel(x_axis, fontsize=14, labelpad=10, color='#333333')
+    ax.set_ylabel(y_axis, fontsize=14, labelpad=10, color='#333333')
+
+    ax.grid(visible=True, which='major', color='#f7f7f7', linewidth=1.5, linestyle='--')
+    ax.tick_params(axis='both', which='major', labelsize=12, color='#555555')
+
+    # Customize legend
+    legend = ax.legend(fontsize=12, loc='upper right', frameon=True)
+    legend.get_frame().set_facecolor('#ffffff')
+    legend.get_frame().set_edgecolor('#e0e0e0')
+    legend.get_frame().set_alpha(0.9)
+
+    # Clean up spines
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    # Display the plot
+    plt.tight_layout()
+    plt.show()
+
+def pretty_heatmap(accuracies, title="DummyTitle", x_axis="DummyXaxis", y_axis="DummyYaxis", model="DummyModel", probe="DummyProbe", dataset="DummyDataset"):
+
+    # Assuming tot_accuracies_heads is already defined
+    sorted_accuracies = np.sort(accuracies, axis=1)[:, ::-1]  # Reverse the order on the X-axis
+    sorted_accuracies = sorted_accuracies[::-1, :]  # Reverse the order on the Y-axis (layers)
+    norm = colors.Normalize(vmin=accuracies.min(), vmax=max(accuracies.max(), 0.75))
+
+    # Set figure aesthetics
+    plt.figure(figsize=(10, 8))  # Slightly larger figure for clarity
+    sns.set(style="whitegrid")  # Light grid background for better visibility
+    ax = sns.heatmap(
+        sorted_accuracies,
+        annot=False,
+        fmt=".2f",
+        cmap="cividis", 
+        cbar_kws={"shrink": 0.9, "aspect": 22},  # Adjust colorbar size and aspect
+        linewidths=0,  
+        linecolor="white",
+        norm=norm 
+    )
+
+    # Adjust Y-axis ticks to reflect the reversed order
+    num_layers = sorted_accuracies.shape[0]
+    num_heads = sorted_accuracies.shape[1]
+    ax.set_yticks(np.arange(num_layers) + 0.5)  # Center ticks
+    ax.set_yticklabels(np.arange(num_layers - 1, -1, -1), fontsize=10)  # Reversed layer indices with proper font size
+
+    ax.set_xticks([])
+
+    # Titles and labels
+    plt.suptitle(title, fontsize=18)
+    plt.title(f"Model: {model} | Probe: {probe} | Dataset: {dataset} ")
+    plt.xlabel(x_axis, fontsize=12, labelpad=10)
+    plt.ylabel(y_axis, fontsize=12, labelpad=10)
+
+    # Add gridlines to separate elements clearly
+    ax.hlines(np.arange(1, num_layers), *ax.get_xlim(), colors="white", linestyles="solid", linewidth=0.2)
+    ax.vlines(np.arange(1, num_heads), *ax.get_ylim(), colors="white", linestyles="solid", linewidth=0.2)
+
+    # Show the plot
+    plt.tight_layout()
+    plt.show()
+
+def pretty_sweep(data, ks, alphas, metric="DummyMetric", custom_subtitle=None):
+
+    # Create the heatmap
+    plt.figure(figsize=(10, 8))  # Adjust size
+    ax = plt.gca()
+    ax.set_aspect('equal')
+
+    sns.heatmap(data, annot=True, fmt=".3f", cmap="Blues", cbar=False, linewidths=0.1, linecolor='grey')
+    ax.set_yticks(np.arange(data.shape[0]) + 0.5, ks)
+    ax.set_xticks(np.arange(data.shape[1]) + 0.5, alphas)
+    # Add titles and labels
+    if custom_subtitle is not None:
+      plt.suptitle(f"Intervention effect | metric: {metric}", fontsize=16)
+      plt.title(f"{custom_subtitle}")
+    else:
+      plt.title(f"Intervention effect | metric: {metric}", fontsize=16, pad=16)
+    plt.xlabel("Alpha", labelpad=10)
+    plt.ylabel("K", labelpad=10)
+
+    # Show the plot
+    plt.show()
