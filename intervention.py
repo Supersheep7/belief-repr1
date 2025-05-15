@@ -188,20 +188,6 @@ def parameter_sweep(model_baseline: HookedTransformer,
         else:
             return metrics, informative, metrics * informative
 
-
-def get_mc_acc(model_baseline: HookedTransformer,
-              model_to_evaluate: HookedTransformer,
-              prompt: t.Tensor,
-              answer: str,
-              dataset_name: str = 'tqa',
-              n_shots: int = 0
-              ) -> float:
-
-    # TO DO: generate answer and check it against the dataset
-    metric = None
-
-    return metric
-
 def format_prompt_for_judge(question, answer, dataset_name='tqa', info=False):
     """
     Formats prompt for fine-tuned end-to-end truth/info scores with GPT-J
