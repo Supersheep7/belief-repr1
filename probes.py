@@ -391,7 +391,7 @@ class UnsupervisedProbe(Probe):
 
 def probe_sweep(list_of_datasets: List,
                 labels: t.Tensor,
-                probe_cfg,
+                probe_cfg
                 ) -> Tuple:
     '''
     Runs a probe sweep on a list of activations

@@ -249,10 +249,11 @@ def pretty_line(x, x1=None, title="DummyTitle", x_axis="DummyXaxis", y_axis="Dum
 
 def pretty_heatmap(accuracies, title="DummyTitle", x_axis="DummyXaxis", y_axis="DummyYaxis", model="DummyModel", probe="DummyProbe", dataset="DummyDataset"):
 
+    accuracies = np.array(accuracies)
     # Assuming tot_accuracies_heads is already defined
     sorted_accuracies = np.sort(accuracies, axis=1)[:, ::-1]  # Reverse the order on the X-axis
     sorted_accuracies = sorted_accuracies[::-1, :]  # Reverse the order on the Y-axis (layers)
-    norm = colors.Normalize(vmin=accuracies.min(), vmax=max(accuracies.max(), 0.75))
+    norm = colors.Normalize(vmin=sorted_accuracies.min(), vmax=max(sorted_accuracies.max(), 0.75))
 
     # Set figure aesthetics
     plt.figure(figsize=(10, 8))  # Slightly larger figure for clarity
