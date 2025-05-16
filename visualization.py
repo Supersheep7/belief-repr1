@@ -189,7 +189,7 @@ def kde(data, labels, model, n_dir=2, zoom_strength=0, adjust=1, kernel=True, sc
             linewidths=0.8 if kernel else 0,
             alpha=1,
             bw_adjust=adjust,
-            marginal_kws={'fill': False, 'common_norm': False, 'alpha': 1, 'linewidth': 0.8}
+            marginal_kws={'fill': True, 'common_norm': False, 'alpha': 0.3, 'linewidth': 0.8}
         )
 
         if scatter:
@@ -211,6 +211,7 @@ def kde(data, labels, model, n_dir=2, zoom_strength=0, adjust=1, kernel=True, sc
         # Add title
         g.ax_joint.set_xlim(x_min, x_max)
         g.ax_joint.set_ylim(y_min, y_max)
+        g.ax_joint.grid(True, linestyle='--', alpha=0.6)
         g.fig.suptitle("KDE with Marginals for Labeled Projections", fontsize=12)
         g.fig.tight_layout()
         plt.show()
