@@ -123,7 +123,49 @@ def get_direction_with_constraint(data, labels, model, first_direction):
     
         return theta / np.linalg.norm(theta)
 
-def kde(data, labels, model, n_dir=2, zoom_strength=0, adjust=1, kernel=True, scatter=True):
+def plot_kde_with_scatter(data, x, y, labels, x_label, y_label, title, x_range=None, y_range=None, kernel=True, scatter=True, adjust=1):
+    """
+    Helper function to create a KDE plot with an optional scatter overlay.
+    """
+    g = sns.jointplot(
+        data=data,
+        x=x,
+        y=y,
+        hue=labels,
+        kind='kde',
+        palette='tab10',
+        linewidths=0.8 if kernel else 0,
+        alpha=1,
+        bw_adjust=adjust,
+        marginal_kws={'fill': True, 'common_norm': False, 'alpha': 0.3, 'linewidth': 0.8}
+    )
+
+    if scatter:
+        sns.scatterplot(
+            data=data,
+            x=x,
+            y=y,
+            hue=labels,
+            palette='coolwarm',
+            marker='o',
+            s=10,
+            edgecolor='black',
+            linewidth=0.2,
+            alpha=0.7,
+            ax=g.ax_joint
+        )
+
+    if x_range:
+        g.ax_joint.set_xlim(*x_range)
+    if y_range:
+        g.ax_joint.set_ylim(*y_range)
+
+    g.ax_joint.grid(True, linestyle='--', alpha=0.6)
+    g.fig.suptitle(title, fontsize=12)
+    g.fig.tight_layout()
+    plt.show()
+
+def kde(data, labels, model, n_dir=2, zoom_strength=0, adjust=1, kernel=True, scatter=True, pca=False):
 
     assert data.shape[0] == labels.shape[0], "Data and labels must have the same number of samples."
 
@@ -137,6 +179,37 @@ def kde(data, labels, model, n_dir=2, zoom_strength=0, adjust=1, kernel=True, sc
     scaler = StandardScaler()
     data = scaler.fit_transform(data)
 
+    if pca:
+        # Perform PCA
+        pca_model = PCA(n_components=2)
+        pca_projections = pca_model.fit_transform(data)
+        
+        x_min, x_max = np.percentile(pca_projections[:, 0], [0 + zoom_strength, 100 - zoom_strength])
+        y_min, y_max = np.percentile(pca_projections[:, 1], [0 + zoom_strength, 100 - zoom_strength])
+
+        data_frame = pd.DataFrame({
+            'PCA1': pca_projections[:, 0],
+            'PCA2': pca_projections[:, 1],
+            'Label': ['False' if label == 0 else 'True' for label in labels]
+        })
+
+        plot_kde_with_scatter(
+            data=data_frame,
+            x='PCA1',
+            y='PCA2',
+            labels='Label',
+            x_label='PCA1',
+            y_label='PCA2',
+            title="PCA with KDE for Labeled Projections",
+            x_range=(x_min, x_max),
+            y_range=(y_min, y_max),
+            kernel=kernel,
+            scatter=scatter,
+            adjust=adjust
+        )
+        return
+
+    # Original KDE logic for LogReg directions
     first_direction = get_direction(data, labels, model)
     data_with_bias = np.hstack([np.ones((data.shape[0], 1)), data])
     first_projections = np.dot(data_with_bias, first_direction)
@@ -149,13 +222,13 @@ def kde(data, labels, model, n_dir=2, zoom_strength=0, adjust=1, kernel=True, sc
             class_projections = first_projections[labels == class_label]
 
             # Estimate density using Gaussian KDE
-            density = gaussian_kde(class_projections, bw_method='scott')  # You can adjust 'scott' or use 'silverman'
-            x_vals = np.linspace(x_min, x_max, 500)  # Use zoomed range for smoother curves
+            density = gaussian_kde(class_projections, bw_method='scott')
+            x_vals = np.linspace(x_min, x_max, 500)
             y_vals = density(x_vals)
 
             # Plot the KDE curve
             plt.plot(x_vals, y_vals, label=f'Class {class_label}')
-            plt.fill_between(x_vals, y_vals, alpha=0.3, label=None)  # Optional: Fill under the curve
+            plt.fill_between(x_vals, y_vals, alpha=0.3, label=None)
 
         plt.axvline(x=0, color='black', linestyle='--', label='Decision Boundary')
         plt.xlabel('Projection onto LogReg Direction')
@@ -166,55 +239,31 @@ def kde(data, labels, model, n_dir=2, zoom_strength=0, adjust=1, kernel=True, sc
         plt.show()
 
     else:
-
         second_direction = get_direction_with_constraint(data_with_bias, labels, model, first_direction)
         second_projections = np.dot(data_with_bias, second_direction)
         x_min, x_max = np.percentile(first_projections, [0 + zoom_strength, 100 - zoom_strength])
         y_min, y_max = np.percentile(second_projections, [0 + zoom_strength, 100 - zoom_strength])
 
-        data = pd.DataFrame({
+        data_frame = pd.DataFrame({
             'First direction': first_projections,
             'Second direction': second_projections,
             'Label': ['False' if label == 0 else 'True' for label in labels]
         })
 
-        # Create jointplot
-        g = sns.jointplot(
-            data=data,
+        plot_kde_with_scatter(
+            data=data_frame,
             x='First direction',
             y='Second direction',
-            hue='Label',
-            kind='kde',
-            palette='tab10',
-            linewidths=0.8 if kernel else 0,
-            alpha=1,
-            bw_adjust=adjust,
-            marginal_kws={'fill': True, 'common_norm': False, 'alpha': 0.3, 'linewidth': 0.8}
+            labels='Label',
+            x_label='First direction',
+            y_label='Second direction',
+            title="KDE with Marginals for Labeled Projections",
+            x_range=(x_min, x_max),
+            y_range=(y_min, y_max),
+            kernel=kernel,
+            scatter=scatter,
+            adjust=adjust
         )
-
-        if scatter:
-        # Overlay scatterplot on jointplot
-          sns.scatterplot(
-              data=data,
-              x='First direction',
-              y='Second direction',
-              hue='Label',
-              palette='coolwarm',
-              marker='o',
-              s=10,
-              edgecolor='black',
-              linewidth=0.2,
-              alpha=0.7,
-              ax=g.ax_joint
-          )
-
-        # Add title
-        g.ax_joint.set_xlim(x_min, x_max)
-        g.ax_joint.set_ylim(y_min, y_max)
-        g.ax_joint.grid(True, linestyle='--', alpha=0.6)
-        g.fig.suptitle("KDE with Marginals for Labeled Projections", fontsize=12)
-        g.fig.tight_layout()
-        plt.show()
 
     return
 
@@ -239,6 +288,71 @@ def pretty_line(x, x1=None, title="DummyTitle", x_axis="DummyXaxis", y_axis="Dum
     legend.get_frame().set_facecolor('#ffffff')
     legend.get_frame().set_edgecolor('#e0e0e0')
     legend.get_frame().set_alpha(0.9)
+
+    # Clean up spines
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    # Display the plot
+    plt.tight_layout()
+    plt.show()
+
+def pretty_line_mass(
+    *lines,
+    labels=None,
+    title="Probe Accuracy on Residual Stream",
+    x_axis="Layers",
+    y_axis="Accuracy"
+):
+    """
+    Create a pretty line plot with any number of lines.
+
+    Parameters:
+    - *lines: Any number of sequences (e.g., lists, numpy arrays) to plot.
+    - labels: List of labels for each line. If None, default labels will be used.
+    - title: Title of the plot.
+    - x_axis: Label for the x-axis.
+    - y_axis: Label for the y-axis.
+    """
+    fig, ax = plt.subplots(figsize=(12, 8), facecolor='w')
+    ax.set_facecolor('#e0e0e0') 
+
+    colors = ['#007acc', '#007acc', 
+              '#d62728', '#d62728', 
+              '#2ca02c', '#2ca02c', 
+              '#9467bd', '#9467bd', 
+              '#8c564b', '#8c564b', 
+              '#e377c2', '#e377c2', 
+              '#7f7f7f', '#7f7f7f']
+    markers = ['o', '^']
+    num_lines = len(lines)
+    
+    if labels is None:
+        labels = [f"Line {i+1}" for i in range(num_lines)]
+    
+    for i, line in enumerate(lines):
+        ax.plot(
+            line,
+            color=colors[i % len(colors)],
+            alpha=0.5,
+            marker=markers[i % len(markers)],
+            markersize=5,
+            linewidth=2.5,
+            label=labels[i]
+        )
+    
+    ax.set_title(title, fontsize=18, pad=20, weight='bold', color='#333333')
+    ax.set_xlabel(x_axis, fontsize=14, labelpad=10, color='#333333')
+    ax.set_ylabel(y_axis, fontsize=14, labelpad=10, color='#333333')
+
+    ax.grid(visible=True, which='major', color='#f7f7f7', linewidth=1.5, linestyle='--')
+    ax.tick_params(axis='both', which='major', labelsize=12, color='#555555')
+
+    # Customize legend
+    legend = ax.legend(fontsize=10.5, loc='upper left', frameon=True)
+    legend.get_frame().set_facecolor('#ffffff')
+    legend.get_frame().set_edgecolor('#e0e0e0')
+    legend.get_frame().set_alpha(0.5)
 
     # Clean up spines
     for spine in ax.spines.values():

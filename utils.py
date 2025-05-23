@@ -394,3 +394,18 @@ def finetune_model(model, df, input_col, target_col, epochs=3, batch_size=16, lr
 
     print("Fine-tuning complete.")
     return model
+
+def get_top_heads(accuracies, n=5):
+    # Number of top elements to extract
+
+    # Flatten the matrix and get the indices of the top n values
+    flat_indices = np.argpartition(accuracies.flatten(), -n)[-n:]
+
+    # Convert the flat indices to 2D coordinates
+    coordinates = np.array(np.unravel_index(flat_indices, accuracies.shape)).T
+
+    # Sort coordinates by value in descending order
+    top_heads = coordinates[np.argsort(-accuracies[tuple(coordinates.T)])]
+    top_values = accuracies[tuple(top_heads.T)]
+
+    return top_heads, top_values

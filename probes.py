@@ -99,6 +99,8 @@ class Probe(object):
             self.direction = nn.Parameter(pos_mean - neg_mean, requires_grad=True)
             centered_data = t.cat([pos_acts - pos_mean, neg_acts - neg_mean], 0)
             self.covariance = centered_data.t() @ centered_data / centered_data.shape[0]
+        elif direction_type == None: 
+            self.direction = None
         else:
             with t.no_grad():
               theta = self.best_probe.coef_[0] if direction_type == 'logistic' else self.best_probe[0].weight[0].cpu().numpy()
@@ -315,7 +317,7 @@ class SupervisedProbe(Probe):
         Shuffle the labels if control is True. This is done to create a control condition for the probe.
         """
         if self.control:
-            np.random.shuffle(self.labels)
+            np.random.shuffle(self.labels_train)
 
     def get_loss(self,
                  p: Float[t.Tensor, "batch"],
@@ -408,7 +410,7 @@ def probe_sweep(list_of_datasets: List,
     best_probes = []
     labels = einops.rearrange(labels, 'n b -> (n b)')
 
-    for dataset in list_of_datasets:
+    for dataset in tqdm(list_of_datasets, desc="heads"):
 
         if probe_cfg.supervision == "S":
             dataset = einops.rearrange(dataset, 'n b d -> (n b) d')
@@ -426,7 +428,8 @@ def probe_sweep(list_of_datasets: List,
                                     probe_cfg=probe_cfg)
         probe.repeated_train()
         accuracies.append(probe.get_acc())
-        directions.append(probe.get_direction(std=probe_cfg.with_std))
+        if probe_cfg.direction_type != None:
+            directions.append(probe.get_direction(std=probe_cfg.with_std))
         best_probes.append(probe.best_probe)
 
     return (accuracies, directions, best_probes)
