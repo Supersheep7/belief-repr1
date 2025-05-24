@@ -410,7 +410,7 @@ def probe_sweep(list_of_datasets: List,
     best_probes = []
     labels = einops.rearrange(labels, 'n b -> (n b)')
 
-    for dataset in tqdm(list_of_datasets, desc="heads"):
+    for dataset in tqdm(list_of_datasets, desc="heads", disable=not probe_cfg.verbose):
 
         if probe_cfg.supervision == "S":
             dataset = einops.rearrange(dataset, 'n b d -> (n b) d')
