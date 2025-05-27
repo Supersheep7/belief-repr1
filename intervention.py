@@ -195,7 +195,7 @@ def parameter_sweep(model_baseline: HookedTransformer,
                         metrics[num_k, num_alpha] = probs_mass_eval(baseline_probs, eval_probs, metric=metric)
                     elif metric == 'judge':
                         metrics[num_k, num_alpha], informative[num_k, num_alpha] = gptj_mass_eval(model_to_evaluate, prompts, client=client, shots=shots, dataset_name=dataset_name)
-                    elif metric == 'truth_assignment':
+                    elif metric == 'boolprobs':
                         if labels is None:
                             raise ValueError("Labels must be provided for truth assignment evaluation.")
                         metrics[num_k, num_alpha] = mass_truth_assignment_eval(model_to_evaluate, prompts, shots=shots, labels=labels)
