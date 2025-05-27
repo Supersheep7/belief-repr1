@@ -210,8 +210,8 @@ def truth_assignment_single_eval(
               model: HookedTransformer,
               prompt: str,
               label: int,
-              true_tokens: List[str] = ['True', 'true', 'TRUE'],
-              false_tokens: List[str] = ['False', 'false', 'FALSE']
+              true_tokens: List[str] = ['true'],
+              false_tokens: List[str] = ['false']
               ):
     
     true_token_ids = [model.tokenizer.convert_tokens_to_ids(token) for token in true_tokens]
@@ -222,17 +222,25 @@ def truth_assignment_single_eval(
     log_p_true = t.logsumexp(log_probs[0, -1, true_token_ids], dim=0).item()
     log_p_false = t.logsumexp(log_probs[0, -1, false_token_ids], dim=0).item()
     log_odds = log_p_true - log_p_false if label == 1 else log_p_false - log_p_true 
-    odds = t.exp(log_odds)
+    odds = np.exp(log_odds)
     metric = odds / (1 + odds)
-    
+    # Determine the actual generated token
+    predicted_token_id = t.argmax(log_probs[0, -1]).item()  # Find the token ID with the highest probability
+    predicted_token = model.tokenizer.decode([predicted_token_id])  # Decode it into a string
+    predicted_token_prob = t.exp(log_probs[0, -1, predicted_token_id]).item()
+    # Print information
+    print("Prompt:\n", prompt)
+    print(f"Label: {label}")
+    print(f"Prediction: {predicted_token}, prob: {predicted_token_prob}")
+    print(f"Probs: true {np.exp(log_p_true):.4f}, false {np.exp(log_p_false):.4f}")
     return metric
 
 def mass_truth_assignment_eval(
               model: HookedTransformer,
               statements: List[str],
               labels: List[int],
-              true_tokens: List[str] = ['True', 'true', 'TRUE'],
-              false_tokens: List[str] = ['False', 'false', 'FALSE'],
+              true_tokens: List[str] = ['true'],
+              false_tokens: List[str] = ['false'],
               shots: List[str] = None,
               ) -> float:
 
@@ -247,7 +255,7 @@ def mass_truth_assignment_eval(
     for statement, label in zip(statements, labels):
         if shots is not None:
             shots_combined = "\n\n".join(shots)
-        prompt = f"{context} \n{shots_combined} \n\nQ: {prompt} \nA: This statement is " if shots is not None else f"{context} \n\nQ: {prompt} \nA: This statement is "
+        prompt = f"{context} \n{shots_combined} \n\nQ: {statement} \nA: This statement is " if shots is not None else f"{context} \n\nQ: {statement} \nA: This statement is "
         total_metric += truth_assignment_single_eval(model, prompt, label, true_tokens, false_tokens)
 
     return total_metric / len(statements)
