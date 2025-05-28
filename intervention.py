@@ -100,14 +100,15 @@ def set_intervention_hooks(model: HookedTransformer,
         assert head_direction.shape == z.shape[-1:], f"Shape mismatch: {head_direction.shape} vs {z.shape[-1:]}"
         # Steer only the d_head corresponding to the given head_index
 
-        activation = z[:, -1, head_idx, :].squeeze().clone()
-
         head_direction = head_direction / head_direction.norm()
 
+        activation = z[:, -1, head_idx, :].squeeze().clone()
+
+        # parallel_component = t.einsum('...d,d->...', activation, head_direction)[..., None] * head_direction
         parallel_component = t.dot(activation, head_direction) * head_direction
         orthogonal_component = activation - parallel_component
         
-        z[:, :, head_idx, :] = orthogonal_component + alpha * parallel_component
+        z[:, -1, head_idx, :] = orthogonal_component + alpha * parallel_component
 
         return z
 
@@ -180,10 +181,10 @@ def parameter_sweep(model_baseline: HookedTransformer,
             informative = np.zeros((len(ks), len(alphas)))
 
         model_baseline.reset_hooks()
-        
+
         if next(model_baseline.parameters(), None).dtype == t.float16:
             model_baseline.add_hook("hook_embed", lambda tensor, hook: tensor.half())
-        
+
         baseline_probs = get_mass_probs(model_baseline, prompts)
 
         for num_k, k in tqdm(enumerate(ks), desc='Processing ks'):
@@ -210,10 +211,10 @@ def truth_assignment_single_eval(
               model: HookedTransformer,
               prompt: str,
               label: int,
-              true_tokens: List[str] = ['true'],
-              false_tokens: List[str] = ['false']
+              true_tokens,
+              false_tokens
               ):
-    
+
     true_token_ids = [model.tokenizer.convert_tokens_to_ids(token) for token in true_tokens]
     false_token_ids = [model.tokenizer.convert_tokens_to_ids(token) for token in false_tokens]
     tokens = model.to_tokens(prompt)
@@ -221,26 +222,29 @@ def truth_assignment_single_eval(
     log_probs = t.nn.functional.log_softmax(logits, dim=-1)
     log_p_true = t.logsumexp(log_probs[0, -1, true_token_ids], dim=0).item()
     log_p_false = t.logsumexp(log_probs[0, -1, false_token_ids], dim=0).item()
-    log_odds = log_p_true - log_p_false if label == 1 else log_p_false - log_p_true 
-    odds = np.exp(log_odds)
-    metric = odds / (1 + odds)
-    # Determine the actual generated token
-    predicted_token_id = t.argmax(log_probs[0, -1]).item()  # Find the token ID with the highest probability
-    predicted_token = model.tokenizer.decode([predicted_token_id])  # Decode it into a string
-    predicted_token_prob = t.exp(log_probs[0, -1, predicted_token_id]).item()
-    # Print information
-    print("Prompt:\n", prompt)
-    print(f"Label: {label}")
-    print(f"Prediction: {predicted_token}, prob: {predicted_token_prob}")
-    print(f"Probs: true {np.exp(log_p_true):.4f}, false {np.exp(log_p_false):.4f}")
-    return metric
+    
+    # log_odds = log_p_true - log_p_false if label == 1 else log_p_false - log_p_true
+    # odds = np.exp(log_odds)
+    # return odds / (1 + odds)
+    correct = int(int(log_p_true >= log_p_false) == label)
+
+    return correct
 
 def mass_truth_assignment_eval(
               model: HookedTransformer,
               statements: List[str],
               labels: List[int],
-              true_tokens: List[str] = ['true'],
-              false_tokens: List[str] = ['false'],
+              true_tokens: List[str] = ['true',
+                                        'Ġtrue',
+                                        'True',
+                                        'ĠTrue'
+                                        ],
+              false_tokens: List[str] = [
+                                        'false',
+                                        'Ġfalse',
+                                        'False',
+                                        'ĠFalse'
+                                        ],
               shots: List[str] = None,
               ) -> float:
 
@@ -330,7 +334,7 @@ def gptj_mass_eval(
     informative = 0
 
     context = f"Interpret each statement literally, and as a statement about the real world; reply 'True' when you think it is true and 'False' when you think it is false, do not generate any other query; reply ‘‘Unsure’’ if you are not completely certain about the answer."
-    
+
     if shots is not None:
         shots_combined = "\n\n".join(shots)
 
