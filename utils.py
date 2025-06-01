@@ -269,7 +269,8 @@ class ActivationExtractor():
                  labels: List, 
                  device: t.device,
                  half: bool,
-                 batch_size=32):
+                 batch_size=32,
+                 pos=-1):
         
         self.model = model.to(device)
         self.X = self.batchify(data, batch_size)
@@ -278,6 +279,7 @@ class ActivationExtractor():
         self.activations = {}
         self.half = half
         self.device = device
+        self.pos = pos  # Position to extract activations from, -1 means last token
 
 
     def set_hooks(self, layers, names, attn=False):
@@ -287,7 +289,7 @@ class ActivationExtractor():
         
         def get_act_hook(tensor, hook):
             
-            last_token = tensor[:, -1, :, :].unsqueeze(0) if attn else tensor[..., -1, :].unsqueeze(0)  
+            last_token = tensor[:, self.pos, :, :].unsqueeze(0) if attn else tensor[..., self.pos, :].unsqueeze(0)  
             last_token = last_token.to(dtype=t.float32, device=self.device)
 
             if hook.name in self.activations:
