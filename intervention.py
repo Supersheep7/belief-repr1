@@ -148,8 +148,8 @@ def full_intervention(model: HookedTransformer,
 
 def intervention_on_residual(
                             model: HookedTransformer,
-                            direction: np.array,
                             activation_accuracies: np.array,
+                            activation_directions: np.array,
                             top_features: np.array = None,
                             K: int = -1,
                             alpha: int = 1,
@@ -157,6 +157,7 @@ def intervention_on_residual(
                             ) -> HookedTransformer:
 
     best_layer_idx = np.argmax(activation_accuracies) 
+    best_direction = activation_directions[best_layer_idx]
 
     def steering_residual_hook(
                       resid: Float[t.Tensor, "n_batch d_batch d_model"],
@@ -182,10 +183,10 @@ def intervention_on_residual(
         # Set half precision for the steering
         model.add_hook("hook_embed", lambda tensor, hook: tensor.half())
     if verbose:
-        print(f"Layer {best_layer_idx}, Direction Norm: {direction.norm().item()}")
+        print(f"Layer {best_layer_idx}, Direction Norm: {best_direction.norm().item()}")
         if half:
-            direction = direction.clone().detach().half()
-        steering = functools.partial(steering_residual_hook, direction=direction, alpha=alpha, k=K, top_features=top_features)
+            best_direction = best_direction.clone().detach().half()
+        steering = functools.partial(steering_residual_hook, direction=best_direction, alpha=alpha, k=K, top_features=top_features)
         model.add_hook(f"blocks.{best_layer_idx}.resid_mid_hook", steering)
 
     return model
@@ -230,6 +231,7 @@ def parameter_sweep(model_baseline: HookedTransformer,
                 for num_alpha, alpha in tqdm(enumerate(alphas), desc='Processing alphas'):
                     model_baseline.reset_hooks()
                     model_to_evaluate = full_intervention(model_baseline, activation_accuracies, activation_directions, K=k, alpha=alpha, verbose=verbose)
+                    model_to_evaluate = intervention_on_residual(model_baseline, activation_accuracies, activation_directions, k, alpha, verbose=verbose)
                     if metric in ['kl', 'ce', 'cosine']:
                         eval_probs = get_mass_probs(model_to_evaluate, prompts)
                         metrics[num_k, num_alpha] = probs_mass_eval(baseline_probs, eval_probs, metric=metric)
