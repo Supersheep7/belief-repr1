@@ -273,7 +273,7 @@ class Probe(object):
             std = self.get_std()
             return std * direction
 
-        return self.direction
+        return direction
     
     def get_std(self) -> t.Tensor:
         '''

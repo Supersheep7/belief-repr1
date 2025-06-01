@@ -47,8 +47,8 @@ def generate(model, prompt, max_length=50, temperature=0.0, top_k=None):
     return generated_text
 
 
-def mask_top_k_heads(head_accuracies: np.array,
-                     head_directions: np.array,
+def mask_top_k(activation_accuracies: np.array,
+                     activation_directions: np.array,
                      K: int = 1
                      ) -> Tuple[List[Tuple], List[np.array]]:
 
@@ -57,27 +57,27 @@ def mask_top_k_heads(head_accuracies: np.array,
     returns a list of the top K heads in coordinate form and their corresponding directions.
 
     E.g. with K = 1
-    returns top_k_head_indices = [(10, 12)]
-    returns top_k_directions = [head_directions[10][12]] = [direction vector of head 12 in layer 10]
+    returns top_k_indices = [(10, 12)]
+    returns top_k_directions = [activation_directions[10][12]] = [direction vector of head 12 in layer 10]
     """
 
-    assert head_accuracies.shape == head_directions.shape[:2], "Shape mismatch between head_accuracies and head_directions"
-    assert K <= head_accuracies.numel(), "K is larger than the number of available heads"
+    assert activation_accuracies.shape == activation_directions.shape[:2], "Shape mismatch between activation_accuracies and activation_directions"
+    assert K <= activation_accuracies.numel(), "K is larger than the number of available heads"
 
     # Get the indices of the top K heads
-    head_accuracies_flattened = head_accuracies.flatten()
+    head_accuracies_flattened = activation_accuracies.flatten()
     flat_indices = np.argsort(head_accuracies_flattened)[-K:]
-    row_indices, col_indices = np.unravel_index(flat_indices, head_accuracies.shape)
-    top_k_head_indices = list(zip(row_indices, col_indices)) # (list of tuples of (layer, head) indices)
+    row_indices, col_indices = np.unravel_index(flat_indices, activation_accuracies.shape)
+    top_k_indices = list(zip(row_indices, col_indices)) # (list of tuples of (layer, head) indices)
 
     # Get the corresponding directions
     top_k_directions = []
-    top_k_directions = [head_directions[layer, head] for layer, head in top_k_head_indices]
+    top_k_directions = [activation_directions[layer, head] for layer, head in top_k_indices]
 
-    return top_k_head_indices, top_k_directions
+    return top_k_indices, top_k_directions
 
 def set_intervention_hooks(model: HookedTransformer,
-                           top_k_head_indices: List[Tuple],
+                           top_k_indices: List[Tuple],
                            top_k_directions: List[t.Tensor],
                            alpha: float = 1,
                            verbose: bool = False
@@ -101,14 +101,8 @@ def set_intervention_hooks(model: HookedTransformer,
         # Steer only the d_head corresponding to the given head_index
 
         head_direction = head_direction / head_direction.norm()
-
-        activation = z[:, -1, head_idx, :].squeeze().clone()
-
-        # parallel_component = t.einsum('...d,d->...', activation, head_direction)[..., None] * head_direction
-        parallel_component = t.dot(activation, head_direction) * head_direction
-        orthogonal_component = activation - parallel_component
         
-        z[:, -1, head_idx, :] = orthogonal_component + alpha * parallel_component
+        z[:, -1, head_idx, :] += alpha * direction
 
         return z
 
@@ -119,8 +113,8 @@ def set_intervention_hooks(model: HookedTransformer,
         # Set half precision for the steering
         model.add_hook("hook_embed", lambda tensor, hook: tensor.half())
     if verbose:
-        print(f"Setting hooks for top {len(top_k_head_indices)} heads:")
-    for (layer, head), direction in zip(top_k_head_indices, top_k_directions):
+        print(f"Setting hooks for top {len(top_k_indices)} heads:")
+    for (layer, head), direction in zip(top_k_indices, top_k_directions):
         if verbose:
             print(f"Layer {layer}, Head {head}, Direction Norm: {direction.norm().item()}")
         if half:
@@ -131,8 +125,8 @@ def set_intervention_hooks(model: HookedTransformer,
     return model
 
 def full_intervention(model: HookedTransformer,
-                      head_accuracies: np.array,
-                      head_directions: np.array,
+                      activation_accuracies: np.array,
+                      activation_directions: np.array,
                       K: int = 1,
                       alpha: int = 1,
                       verbose: bool = False) -> HookedTransformer:
@@ -141,16 +135,61 @@ def full_intervention(model: HookedTransformer,
     Full intervention function that sets the hooks for the top K heads and returns the model with the hooks set.
     """
     # Force everything into tensors
-    head_accuracies = t.as_tensor(head_accuracies)
-    head_directions = t.as_tensor(head_directions)
+    activation_accuracies = t.as_tensor(activation_accuracies)
+    activation_directions = t.as_tensor(activation_directions)
 
     # Get the top K heads and their directions
-    top_k_head_indices, top_k_directions = mask_top_k_heads(head_accuracies, head_directions, K)
+    top_k_indices, top_k_directions = mask_top_k(activation_accuracies, activation_directions, K)
 
     # Set the intervention hooks for the top K heads
-    model = set_intervention_hooks(model, top_k_head_indices, top_k_directions, alpha, verbose)
+    model = set_intervention_hooks(model, top_k_indices, top_k_directions, alpha, verbose)
 
     return model
+
+def intervention_on_residual(
+                            model: HookedTransformer,
+                            direction: np.array,
+                            activation_accuracies: np.array,
+                            top_features: np.array = None,
+                            K: int = -1,
+                            alpha: int = 1,
+                            verbose: bool = False
+                            ) -> HookedTransformer:
+
+    best_layer_idx = np.argmax(activation_accuracies) 
+
+    def steering_residual_hook(
+                      resid: Float[t.Tensor, "n_batch d_batch d_model"],
+                      hook: HookPoint,
+                      direction: t.Tensor,
+                      alpha: float = 1,
+                      K: int = -1,
+                      top_features: int = None
+                      ):
+
+        assert direction.shape == resid.shape[-1:], f"Shape mismatch: {direction.shape} vs {resid.shape[-1:]}"
+        
+        direction = direction / direction.norm()
+
+        resid[:, :, -1] += alpha * direction
+
+        return resid
+
+    model.reset_hooks()
+    half = True if next(model.parameters(), None).dtype == t.float16 else False
+
+    if half:
+        # Set half precision for the steering
+        model.add_hook("hook_embed", lambda tensor, hook: tensor.half())
+    if verbose:
+        print(f"Layer {best_layer_idx}, Direction Norm: {direction.norm().item()}")
+        if half:
+            direction = direction.clone().detach().half()
+        steering = functools.partial(steering_residual_hook, direction=direction, alpha=alpha, k=K, top_features=top_features)
+        model.add_hook(f"blocks.{best_layer_idx}.resid_mid_hook", steering)
+
+    return model
+    
 
 '''
 = = = = = = = = = = = = = = = = Evaluation = = = = = = = = = = = = = = = =
@@ -160,8 +199,8 @@ def full_intervention(model: HookedTransformer,
 
 def parameter_sweep(model_baseline: HookedTransformer,
                     prompts: List[str],
-                    head_accuracies,
-                    head_directions,
+                    activation_accuracies,
+                    activation_directions,
                     ks : List = [1, 2, 3, 4, 5],
                     alphas: List = [1, 2, 3, 4, 5],
                     metric: str = 'cosine',
@@ -190,7 +229,7 @@ def parameter_sweep(model_baseline: HookedTransformer,
         for num_k, k in tqdm(enumerate(ks), desc='Processing ks'):
                 for num_alpha, alpha in tqdm(enumerate(alphas), desc='Processing alphas'):
                     model_baseline.reset_hooks()
-                    model_to_evaluate = full_intervention(model_baseline, head_accuracies, head_directions, K=k, alpha=alpha, verbose=verbose)
+                    model_to_evaluate = full_intervention(model_baseline, activation_accuracies, activation_directions, K=k, alpha=alpha, verbose=verbose)
                     if metric in ['kl', 'ce', 'cosine']:
                         eval_probs = get_mass_probs(model_to_evaluate, prompts)
                         metrics[num_k, num_alpha] = probs_mass_eval(baseline_probs, eval_probs, metric=metric)
