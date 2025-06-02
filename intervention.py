@@ -98,7 +98,7 @@ def set_intervention_hooks(model: HookedTransformer,
         # Steer only the d_head corresponding to the given head_index
 
         head_direction = head_direction / head_direction.norm()
-        
+
         z[:, -1, head_idx, :] += alpha * direction
 
         return z
@@ -147,30 +147,27 @@ def intervention_on_residual(
                             model: HookedTransformer,
                             activation_accuracies: np.array,
                             activation_directions: np.array,
-                            top_features: np.array = None,
-                            K: int = -1,
+                            k: int = -1,
                             alpha: int = 1,
+                            top_features: np.array = None,
                             verbose: bool = False
                             ) -> HookedTransformer:
 
-    best_layer_idx = np.argmax(activation_accuracies) 
-    best_direction = activation_directions[best_layer_idx]
+    top_k_indices = np.argsort(activation_accuracies)[-k:][::-1]
+    top_k_directions = [t.as_tensor(activation_directions[i]) for i in top_k_indices]
 
     def steering_residual_hook(
-                      resid: Float[t.Tensor, "n_batch d_batch d_model"],
+                      resid: Float[t.Tensor, "n_batch n_seq d_model"],
                       hook: HookPoint,
                       direction: t.Tensor,
                       alpha: float = 1,
-                      K: int = -1,
                       top_features: int = None
                       ):
 
         assert direction.shape == resid.shape[-1:], f"Shape mismatch: {direction.shape} vs {resid.shape[-1:]}"
-        
+
         direction = direction / direction.norm()
-
-        resid[:, :, -1] += alpha * direction
-
+        resid[:, -1, :] += alpha * direction
         return resid
 
     model.reset_hooks()
@@ -179,15 +176,14 @@ def intervention_on_residual(
     if half:
         # Set half precision for the steering
         model.add_hook("hook_embed", lambda tensor, hook: tensor.half())
-    if verbose:
-        print(f"Layer {best_layer_idx}, Direction Norm: {best_direction.norm().item()}")
+    for layer, direction in zip(top_k_indices, top_k_directions):        
         if half:
-            best_direction = best_direction.clone().detach().half()
-        steering = functools.partial(steering_residual_hook, direction=best_direction, alpha=alpha, k=K, top_features=top_features)
-        model.add_hook(f"blocks.{best_layer_idx}.resid_mid_hook", steering)
+            direction = direction.clone().detach().half()
+        steering = functools.partial(steering_residual_hook, direction=direction, alpha=alpha, top_features=top_features)
+        model.add_hook(f"blocks.{layer}.hook_resid_mid", steering)
 
     return model
-    
+
 
 '''
 = = = = = = = = = = = = = = = = Evaluation = = = = = = = = = = = = = = = =
@@ -217,6 +213,8 @@ def parameter_sweep(model_baseline: HookedTransformer,
         if metric == 'judge':
             client = openai.OpenAI(api_key=secret)
             informative = np.zeros((len(ks), len(alphas)))
+        if metric == 'boolprobs':
+            prob_diff = np.zeros((len(ks), len(alphas)))
 
         model_baseline.reset_hooks()
 
@@ -225,13 +223,15 @@ def parameter_sweep(model_baseline: HookedTransformer,
 
         baseline_probs = get_mass_probs(model_baseline, prompts)
 
-        for num_k, k in tqdm(enumerate(ks), desc='Processing ks'):
-                for num_alpha, alpha in tqdm(enumerate(alphas), desc='Processing alphas'):
+        for num_k, k in tqdm(enumerate(ks)):
+                tqdm.write(f"Steering top {k} activations")
+                for num_alpha, alpha in tqdm(enumerate(alphas)):
+                    tqdm.write(f"With strength {alpha}")
                     model_baseline.reset_hooks()
                     if attn:
                         model_to_evaluate = full_intervention(model_baseline, activation_accuracies, activation_directions, K=k, alpha=alpha, verbose=verbose)
                     else:
-                        model_to_evaluate = intervention_on_residual(model_baseline, activation_accuracies, activation_directions, k, alpha, verbose=verbose)
+                        model_to_evaluate = intervention_on_residual(model=model_baseline, activation_accuracies=activation_accuracies, activation_directions=activation_directions, k=k, alpha=alpha, verbose=verbose)
                     if metric in ['kl', 'ce', 'cosine']:
                         eval_probs = get_mass_probs(model_to_evaluate, prompts)
                         metrics[num_k, num_alpha] = probs_mass_eval(baseline_probs, eval_probs, metric=metric)
@@ -240,11 +240,13 @@ def parameter_sweep(model_baseline: HookedTransformer,
                     elif metric == 'boolprobs':
                         if labels is None:
                             raise ValueError("Labels must be provided for truth assignment evaluation.")
-                        metrics[num_k, num_alpha] = mass_truth_assignment_eval(model_to_evaluate, prompts, shots=shots, labels=labels)
-        if metric != 'judge':
-            return metrics
-        else:
+                        metrics[num_k, num_alpha], prob_diff[num_k, num_alpha] = mass_truth_assignment_eval(model_to_evaluate, prompts, shots=shots, labels=labels)
+        if metric == 'judge':
             return metrics, informative, metrics * informative
+        elif metric == 'boolprobs':
+            return metrics, prob_diff
+        else:
+            return metrics
 
 ''' *** P(True)-P(False) ***'''
 
@@ -268,15 +270,19 @@ def truth_assignment_single_eval(
     # return odds / (1 + odds)
     most_probable_token_id = t.argmax(log_probs[0, -1]).item()
     most_probable_token = model.tokenizer.convert_ids_to_tokens([most_probable_token_id])[0]
-    print(f"Prompt: {prompt}")
-    print(f"Answer: {most_probable_token}")
-    print(f"P(True): {np.exp(log_p_true)}, P(False): {np.exp(log_p_false)}")
+    # print(f"Prompt: {prompt}")
+    # print(f"Answer: {most_probable_token}")
+    # print(f"P(True): {np.exp(log_p_true)}, P(False): {np.exp(log_p_false)}")
     correct = int(int(log_p_true >= log_p_false) == label)
     if np.exp(log_p_true) + np.exp(log_p_false) < 0.1:
-        correct = 0.5 
-    print(f"Correct: {correct}")
+        print("Broken!")
+        correct = 0.5
+    # print(f"Correct: {correct}")
 
-    return correct
+    prob_diff = np.exp(log_p_true) - np.exp(log_p_false) if label == 1 else np.exp(log_p_false) - np.exp(log_p_true)
+    # print(prob_diff)
+
+    return correct, prob_diff
 
 def mass_truth_assignment_eval(
               model: HookedTransformer,
@@ -303,13 +309,16 @@ def mass_truth_assignment_eval(
     assert len(statements) == len(labels), "Number of prompts and labels must match"
 
     total_metric = 0.0
+    total_prob_diff = 0.0
     for statement, label in zip(statements, labels):
         if shots is not None:
             shots_combined = "\n\n".join(shots)
-        prompt = f"{statement}"
-        total_metric += truth_assignment_single_eval(model, prompt, label, true_tokens, false_tokens)
+        prompt = f"The sky is blue. This sentence is: True \n The earth is flat. This sentence is: False \n {statement}"
+        correct, prob_diff = truth_assignment_single_eval(model, prompt, label, true_tokens, false_tokens)
+        total_metric += correct
+        total_prob_diff += prob_diff
 
-    return total_metric / len(statements)
+    return total_metric / len(statements), total_prob_diff / len(statements)
 
 ''' *** GPT-J *** '''
 
