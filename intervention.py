@@ -275,7 +275,6 @@ def truth_assignment_single_eval(
     # print(f"P(True): {np.exp(log_p_true)}, P(False): {np.exp(log_p_false)}")
     correct = int(int(log_p_true >= log_p_false) == label)
     if np.exp(log_p_true) + np.exp(log_p_false) < 0.1:
-        print("Broken!")
         correct = 0.5
     # print(f"Correct: {correct}")
 
@@ -310,15 +309,14 @@ def mass_truth_assignment_eval(
 
     total_metric = 0.0
     total_prob_diff = 0.0
+    considered_statements = len(statements)
     for statement, label in zip(statements, labels):
-        if shots is not None:
-            shots_combined = "\n\n".join(shots)
         prompt = f"The sky is blue. This sentence is: True \n The earth is flat. This sentence is: False \n {statement}"
         correct, prob_diff = truth_assignment_single_eval(model, prompt, label, true_tokens, false_tokens)
         total_metric += correct
         total_prob_diff += prob_diff
 
-    return total_metric / len(statements), total_prob_diff / len(statements)
+    return total_metric / considered_statements, total_prob_diff / considered_statements
 
 ''' *** GPT-J *** '''
 
