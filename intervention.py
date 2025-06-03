@@ -45,9 +45,9 @@ def generate(model, prompt, max_length=50, temperature=0.0, top_k=None):
 
 
 def mask_top_k(activation_accuracies: np.array,
-                     activation_directions: np.array,
-                     K: int = 1
-                     ) -> Tuple[List[Tuple], List[np.array]]:
+                activation_directions: np.array,
+                K: int = 1
+                ) -> Tuple[List[Tuple], List[np.array]]:
 
     """
     Takes a tensor of head accuracies and a tensor of head directions,
@@ -84,7 +84,7 @@ def set_intervention_hooks(model: HookedTransformer,
     Sets the intervention hooks for the top K heads.
     """
 
-    def steering_hook(z: Float[t.Tensor, "n_batch d_batch n_head d_head"],
+    def steering_hook(z: Float[t.Tensor, "d_batch seq_len n_head d_head"],
                       hook: HookPoint,
                       head_idx: int,
                       head_direction: t.Tensor,
@@ -117,6 +117,7 @@ def set_intervention_hooks(model: HookedTransformer,
         if half:
             direction = direction.clone().detach().half()
         steering = functools.partial(steering_hook, head_idx=head, head_direction=direction, alpha=alpha)
+        print("adding hook for layer", layer, "head", head)
         model.add_hook(f"blocks.{layer}.attn.hook_z", steering)
 
     return model
@@ -271,10 +272,11 @@ def truth_assignment_single_eval(
     most_probable_token_id = t.argmax(log_probs[0, -1]).item()
     most_probable_token = model.tokenizer.convert_ids_to_tokens([most_probable_token_id])[0]
     # print(f"Prompt: {prompt}")
-    # print(f"Answer: {most_probable_token}")
     # print(f"P(True): {np.exp(log_p_true)}, P(False): {np.exp(log_p_false)}")
     correct = int(int(log_p_true >= log_p_false) == label)
     if np.exp(log_p_true) + np.exp(log_p_false) < 0.1:
+        # print("Broken!")
+        print(f"Answer: {most_probable_token}")
         correct = 0.5
     # print(f"Correct: {correct}")
 
