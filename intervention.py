@@ -273,17 +273,17 @@ def truth_assignment_single_eval(
     most_probable_token = model.tokenizer.convert_ids_to_tokens([most_probable_token_id])[0]
     # print(f"Prompt: {prompt}")
     # print(f"P(True): {np.exp(log_p_true)}, P(False): {np.exp(log_p_false)}")
-    correct = int(int(log_p_true >= log_p_false) == label)
+    successful = int(int(log_p_true >= log_p_false) != label)
     if np.exp(log_p_true) + np.exp(log_p_false) < 0.1:
         # print("Broken!")
         print(f"Answer: {most_probable_token}")
-        correct = 0.5
+        successful = 0
     # print(f"Correct: {correct}")
 
     prob_diff = np.exp(log_p_true) - np.exp(log_p_false) if label == 1 else np.exp(log_p_false) - np.exp(log_p_true)
     # print(prob_diff)
 
-    return correct, prob_diff
+    return successful, prob_diff
 
 def mass_truth_assignment_eval(
               model: HookedTransformer,
