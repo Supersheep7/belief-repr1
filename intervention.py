@@ -19,28 +19,38 @@ from shots import get_shots
 '''
 
 def generate(model, prompt, max_length=50, temperature=0.0, top_k=None):
+    if temperature == 0:
+      assert temperature == 0, "Temperature should always be 0 for deterministic behavior."
+    with t.no_grad():
+      tokens = model.to_tokens(prompt)
+      generated_tokens = tokens.clone()
+      for _ in range(max_length):
+          logits = model(generated_tokens)
+          next_token_logits = logits[0, -1, :]
+          if temperature > 0:
+            next_token_logits /= temperature
 
-    tokens = model.to_tokens(prompt)
-    generated_tokens = tokens.clone()
+          if top_k is not None:
+              top_k_values, _ = t.topk(next_token_logits, top_k)
+              threshold = top_k_values[-1]
+              next_token_logits[next_token_logits < threshold] = -float('inf')
 
-    for _ in range(max_length):
-        logits = model(generated_tokens)
-        next_token_logits = logits[0, -1, :]
-        if temperature > 0:
-          next_token_logits /= temperature
-
-        if top_k is not None:
-            top_k_values, _ = t.topk(next_token_logits, top_k)
-            threshold = top_k_values[-1]
-            next_token_logits[next_token_logits < threshold] = -float('inf')
-
-        probabilities = t.nn.functional.softmax(next_token_logits, dim=-1)
-        next_token = t.multinomial(probabilities, num_samples=1)
-        generated_tokens = t.cat([generated_tokens, next_token.unsqueeze(0)], dim=1)
-        if next_token.item() == model.tokenizer.eos_token_id:
-            break
-    generated_text = model.tokenizer.decode(generated_tokens[0, len(tokens[0]):])
-
+          probabilities = t.nn.functional.softmax(next_token_logits, dim=-1)
+          if temperature != 0:
+              next_token = t.multinomial(probabilities, num_samples=1)
+          else:
+              next_token = t.argmax(probabilities)
+              # print(next_token)
+          generated_tokens = t.cat([generated_tokens, next_token.unsqueeze(0).unsqueeze(0)], dim=1)
+          if next_token.item() == model.tokenizer.eos_token_id:
+              break
+      generated_text = model.tokenizer.decode(generated_tokens[0, len(tokens[0]):])
+      del logits
+      del probabilities
+      del generated_tokens
+      del next_token
+      t.cuda.empty_cache()
+      t.cuda.ipc_collect()
     return generated_text
 
 
