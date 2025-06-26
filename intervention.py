@@ -99,7 +99,7 @@ def set_intervention_hooks(model: HookedTransformer,
 
         head_direction = head_direction / head_direction.norm()
 
-        z[:, -1, head_idx, :] += alpha * direction
+        z[:, -1, head_idx, :] += alpha * head_direction
 
         return z
 
@@ -221,8 +221,8 @@ def parameter_sweep(model_baseline: HookedTransformer,
 
         if next(model_baseline.parameters(), None).dtype == t.float16:
             model_baseline.add_hook("hook_embed", lambda tensor, hook: tensor.half())
-
-        baseline_probs = get_mass_probs(model_baseline, prompts)
+        if metric in ['kl', 'ce', 'cosine']:
+           baseline_probs = get_mass_probs(model_baseline, prompts)
 
         for num_k, k in tqdm(enumerate(ks)):
                 tqdm.write(f"Steering top {k} activations")
@@ -274,7 +274,7 @@ def truth_assignment_single_eval(
     # print(f"Prompt: {prompt}")
     # print(f"P(True): {np.exp(log_p_true)}, P(False): {np.exp(log_p_false)}")
     successful = int(int(log_p_true >= log_p_false) != label)
-    if np.exp(log_p_true) + np.exp(log_p_false) < 0.1:
+    if np.exp(log_p_true) + np.exp(log_p_false) < 0.05:
         # print("Broken!")
         print(f"Answer: {most_probable_token}")
         successful = 0
