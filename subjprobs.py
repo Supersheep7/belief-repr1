@@ -136,3 +136,63 @@ def recursive_probing(probe_config, X_train, y_train, X_test, y_test, n=100, ort
                 print(f"Run {i+1}/{n} accuracy: {acc:.4f}")
 
         return probabilities
+    
+class JudgeCoherence():
+
+    def __init__(self, logic: str = None, metric: callable = None):
+        
+        self.logic = None
+        self.metric = None
+
+    def set_logic(self, logic: str):
+
+        self.logic = logic
+
+    def cosine_metric(self, proba1: t.Tensor, proba2: t.Tensor) -> Float:
+        '''
+        Computes the cosine distance between two probability distributions.
+        '''
+        proba1 = t.tensor(proba1)
+        proba2 = t.tensor(proba2)
+        return t.nn.functional.cosine_similarity(proba1, proba2, dim=-1)
+    
+    def kl_metric(self, proba1: t.Tensor, proba2: t.Tensor) -> Float:
+        '''
+        Computes the KL divergence between two probability distributions.
+        '''
+        proba1 = t.tensor(proba1)
+        proba2 = t.tensor(proba2)
+        return t.nn.functional.kl_div(t.log_softmax(proba1, dim=-1), t.softmax(proba2, dim=-1), reduction='batchmean')
+
+    def rmse_metric(self, proba1: t.Tensor, proba2: t.Tensor) -> Float:
+        '''
+        Computes the RMSE between two probability distributions.
+        '''
+        proba1 = t.tensor(proba1)
+        proba2 = t.tensor(proba2)
+        return t.sqrt(t.mean((proba1 - proba2) ** 2))
+    
+    def aggregate_euclidean_metric(self, proba1: t.Tensor, proba2: t.Tensor) -> Float:
+        '''
+        Computes the Euclidean distance between two probability distributions.
+        '''
+        proba1 = t.tensor(proba1)
+        proba2 = t.tensor(proba2)
+        return t.norm(proba1 - proba2, p=2)
+
+    def set_metric(self, metric: callable):
+        '''
+        A metric is a function that takes in a list/tensor of probabilities and returns a single float value.
+        This can be performed in terms of distance metrics wrt an ideal agent
+        Watch out: depending on the logic, the metric may take in different number of arguments.
+        '''
+        self.metric = metric
+
+    def judge(self, proba: list) -> Float:
+
+        if self.logic == 'neg':
+            return self.metric(proba[0] + proba[1])
+        elif self.logic in ['disj', 'conj', 'datasets']:
+            return self.metric(proba[0], proba[1])
+        elif self.logic == 'infe':
+            return self.metric(proba[0], proba[1], proba[2])
