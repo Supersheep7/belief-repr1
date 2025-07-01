@@ -22,6 +22,7 @@ from datasets import Dataset
 from transformers import TrainingArguments, Trainer, EarlyStoppingCallback
 
 
+
 def decompose_mha(mha_batch: Float[t.Tensor, "n_batch batch_size n_head d_head"]
                   ) -> List[Float[t.Tensor, "n_batch batch_size d_head"]]:
 
@@ -290,12 +291,12 @@ class ActivationExtractor():
         def get_act_hook(tensor, hook):
             
             last_token = tensor[:, self.pos, :, :].unsqueeze(0) if attn else tensor[..., self.pos, :].unsqueeze(0)  
-            last_token = last_token.to(dtype=t.float32, device=self.device)
+            last_token = last_token.to(dtype=t.float16, device=t.device('cpu'))
 
             if hook.name in self.activations:
                 self.activations[hook.name] = t.cat([self.activations[hook.name], last_token], dim=0)
             else:
-                self.activations[hook.name] = last_token  
+                self.activations[hook.name] = last_token
 
             return tensor
 

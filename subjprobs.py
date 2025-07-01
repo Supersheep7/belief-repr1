@@ -15,6 +15,7 @@ import openai
 from shots import get_shots
 from intervention import generate
 import re
+from sklearn.linear_model import LogisticRegression
 
 def self_reporting_confidence(model: HookedTransformer,
                               prompt: str,
@@ -65,3 +66,73 @@ def logit_confidence(model: HookedTransformer,
       truth_value = 'True' if normalized_p_true > normalized_p_false else 'False'
       
     return truth_value, max(normalized_p_true, normalized_p_false)
+
+# On latent representations
+
+def probe_confidence(activations: t.Tensor, trained_probe, probe_type='logistic') -> Float: 
+    """
+    Computes the confidence score using a trained probe or a set thereof on an activation batch.
+    """
+    activations = activations.cpu().numpy()
+
+    if isinstance(trained_probe, list):
+        confidence = 0
+        for probe in trained_probe:
+            confidence += probe.predict_proba(activations)[:, 1] if probe_type == 'logistic' else probe(activations)
+        confidence /= len(trained_probe)
+    else:
+        confidence = trained_probe.predict_proba(activations)[:, 1] if probe_type == 'logistic' else trained_probe(activations)
+
+    return confidence
+
+def recursive_probing(probe_config, X_train, y_train, X_test, y_test, n=100, orthogonal=False):
+
+    if not orthogonal:
+
+        probabilities = np.zeros((X_test.shape[0], 1))
+        tot_acc = 0
+        for i in range(n):
+            logreg = LogisticRegression(max_iter=probe_config.max_iter,
+                                            solver="lbfgs",
+                                            C=probe_config.C,
+                                            random_state=i,
+                                            n_jobs=-1)
+            logreg.fit(X_train, y_train)
+            predicted_proba = logreg.predict_proba(X_test)[:, 1]
+            if probe_config.log_accuracy_on_recursive:
+                predictions = logreg.predict(X_test)
+                acc = (predictions == y_test).mean()
+                tot_acc += acc
+            probabilities += predicted_proba.reshape(-1, 1)
+
+        probabilities /= n
+        if probe_config.log_accuracy_on_recursive:
+            print(f"Average accuracy over {n} runs: {tot_acc / n:.4f}")
+
+        return probabilities
+    
+    else:
+
+        probabilities = np.zeros((X_test.shape[0], n))
+        directions = []
+        for i in range(n):  
+            logreg = LogisticRegression(max_iter=probe_config.max_iter,
+                                        solver="lbfgs",
+                                        C=probe_config.C,
+                                        random_state=42,
+                                        n_jobs=-1,
+                                        fit_intercept=False)
+            for direction in directions:
+                # Orthogonal constraint
+                projected = np.dot(X_train, direction)
+                X_train = X_train - np.outer(projected, direction) / np.dot(direction, direction)
+            logreg.fit(X_train, y_train)
+            directions.append(logreg.coef_.flatten())
+            predicted_proba = logreg.predict_proba(X_test)[:, 1]
+            probabilities[:, i] = predicted_proba
+            if probe_config.log_accuracy_on_recursive:
+                predictions = logreg.predict(X_test)
+                acc = (predictions == y_test).mean()
+                print(f"Run {i+1}/{n} accuracy: {acc:.4f}")
+
+        return probabilities

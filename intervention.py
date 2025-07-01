@@ -284,7 +284,7 @@ def truth_assignment_single_eval(
     # print(f"Prompt: {prompt}")
     # print(f"P(True): {np.exp(log_p_true)}, P(False): {np.exp(log_p_false)}")
     successful = int(int(log_p_true >= log_p_false) != label)
-    if np.exp(log_p_true) + np.exp(log_p_false) < 0.05:
+    if np.exp(log_p_true) + np.exp(log_p_false) < 0.1:
         # print("Broken!")
         print(f"Answer: {most_probable_token}")
         successful = 0
