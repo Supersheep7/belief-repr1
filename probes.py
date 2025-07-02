@@ -27,14 +27,16 @@ class MMP(nn.Module):
 
     def __init__(self, direction, covariance, inv=None, atol=1e-3):
         super().__init__()
-        self.direction = direction
+        self.direction = direction.to(device)
 
         if inv is None:
-            self.inv = nn.Parameter(t.linalg.pinv(covariance, hermitian=True, atol=atol), requires_grad=True)
+            inv_32 = t.linalg.pinv(covariance.float(), hermitian=True, atol=atol)
+            self.inv = nn.Parameter(inv_32.to(dtype=t.float16), requires_grad=False).to(device)
         else:
-            self.inv = nn.Parameter(inv, requires_grad=True)
+            self.inv = nn.Parameter(inv, requires_grad=False).to(device)
 
     def forward(self, x, iid=True):
+        x = nn.Parameter(t.tensor(x).to(device), requires_grad=False)
         if iid:
             return t.nn.Sigmoid()(x @ self.inv @ self.direction).unsqueeze(1)
         else:
@@ -92,7 +94,9 @@ class Probe(object):
                 x_test = t.tensor(self.X_test, dtype=t.float, device=self.device) if not isinstance(self.x, t.Tensor) else self.X_test
                 y_train = t.tensor(self.labels_train, dtype=t.float, device=self.device) if not isinstance(self.x, t.Tensor) else self.labels_train
                 y_test = t.tensor(self.labels_test, dtype=t.float, device=self.device) if not isinstance(self.x, t.Tensor) else self.labels_test
-            whole_dataset = t.cat([x_train, x_test], dim=0)
+            else:
+                x_train, x_test, y_train, y_test = self.x, self.X_test, self.labels_train, self.labels_test
+            whole_dataset = t.cat([x_train, x_test], dim=0).to(device)
             labels = t.cat([y_train, y_test], dim=0)
             pos_acts, neg_acts = whole_dataset[labels == 1], whole_dataset[labels == 0]
             pos_mean, neg_mean = pos_acts.mean(0), neg_acts.mean(0)
@@ -111,8 +115,13 @@ class Probe(object):
         if self.probe_type == "mmp":
             # We need the direction and covariance in advance for the MMP probe 
             self.initialize_direction('mmp')
+            self.x = np.array(self.x)
+            self.X_test = np.array(self.X_test)
+            self.labels_train = np.array(self.labels_train.detach().cpu())
+            self.labels_test = np.array(self.labels_test.detach().cpu())
+            self.probe = MMP(direction=self.direction, covariance=self.covariance)
 
-        if self.probe_type == "linear":
+        elif self.probe_type == "linear":
             self.x = np.array(self.x.detach().cpu())
             self.X_test = np.array(self.X_test.detach().cpu())
             self.labels_train = np.array(self.labels_train.detach().cpu())
@@ -184,6 +193,9 @@ class Probe(object):
             self.probe.fit(self.x, self.labels_train)
             self.best_probe = copy.deepcopy(self.probe)
             return None
+        
+        elif self.probe_type == "mmp":
+            self.initialize_probe()
 
         else:
             best_loss = float('inf')
@@ -318,6 +330,8 @@ class SupervisedProbe(Probe):
         """
         if self.control:
             np.random.shuffle(self.labels_train)
+            if self.probe_type == "mmp":
+                np.random.shuffle(self.labels_test)
 
     def get_loss(self,
                  p: Float[t.Tensor, "batch"],
@@ -336,6 +350,13 @@ class SupervisedProbe(Probe):
             labels_test = self.labels_test
             predictions = self.probe.predict(X_test)
             acc = (predictions == labels_test).mean()
+        elif self.probe_type == 'mmp':
+            # We just call a forward
+            X_test = self.X_test
+            labels_test = self.labels_test
+            predictions = self.probe(X_test, iid=True).squeeze(-1).detach().cpu().numpy().round() # Only one probe
+            acc = (predictions == labels_test).mean()
+            print(acc)
 
         else:
             with t.no_grad():
