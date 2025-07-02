@@ -12,6 +12,7 @@ import einops
 from sklearn.linear_model import LogisticRegression
 import matplotlib.pyplot as plt
 
+device = t.device("cuda" if t.cuda.is_available() else "cpu")
 '''
 Here we have the three probes that we will deploy to test for internal representation of belief
 Logreg is a simple logistic regressor
@@ -83,7 +84,7 @@ class Probe(object):
         self.covariance = None
         self.std = None
 
-    def initialize_direction(self, direction_type):
+    def initialize_direction(self, direction_type, full_dataset=True):
         
         if direction_type == 'mmp':
             """
@@ -96,9 +97,13 @@ class Probe(object):
                 y_test = t.tensor(self.labels_test, dtype=t.float, device=self.device) if not isinstance(self.x, t.Tensor) else self.labels_test
             else:
                 x_train, x_test, y_train, y_test = self.x, self.X_test, self.labels_train, self.labels_test
-            whole_dataset = t.cat([x_train, x_test], dim=0).to(device)
-            labels = t.cat([y_train, y_test], dim=0)
-            pos_acts, neg_acts = whole_dataset[labels == 1], whole_dataset[labels == 0]
+            if full_dataset:
+                data_for_mm = t.cat([x_train, x_test], dim=0).to(device)
+                labels_for_mm = t.cat([y_train, y_test], dim=0)
+            else:
+                data_for_mm = t.tensor(x_train, device=device)
+                labels_for_mm = t.tensor(y_train, device=device)
+            pos_acts, neg_acts = data_for_mm[labels_for_mm == 1], data_for_mm[labels_for_mm == 0]
             pos_mean, neg_mean = pos_acts.mean(0), neg_acts.mean(0)
             self.direction = nn.Parameter(pos_mean - neg_mean, requires_grad=True)
             centered_data = t.cat([pos_acts - pos_mean, neg_acts - neg_mean], 0)
@@ -114,7 +119,7 @@ class Probe(object):
 
         if self.probe_type == "mmp":
             # We need the direction and covariance in advance for the MMP probe 
-            self.initialize_direction('mmp')
+            self.initialize_direction('mmp', full_dataset=False)
             self.x = np.array(self.x)
             self.X_test = np.array(self.X_test)
             self.labels_train = np.array(self.labels_train.detach().cpu())
