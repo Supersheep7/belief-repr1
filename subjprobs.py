@@ -6,16 +6,101 @@ import transformer_lens.utils as utils
 from transformer_lens.hook_points import (
     HookPoint,
 )
+import copy
 from transformer_lens import HookedTransformer
 from jaxtyping import Float, Int
 from typing import List, Tuple, Dict
 import numpy as np
 import functools
-import openai
-from shots import get_shots
 from intervention import generate
 import re
 from sklearn.linear_model import LogisticRegression
+import torch as t
+import torch.nn as nn
+import matplotlib.pyplot as plt
+from torch.utils.data import DataLoader, TensorDataset
+
+class LinearProbe():
+
+    def __init__(self, X_train, y_train, X_test, y_test,
+                 input_dim: int, output_dim: int = 1, 
+                 probe_config=None, random_state: int = 42):
+
+        linear_layer = nn.Linear(self.input_dim, 1, bias=True, random_state=random_state)       
+        nn.init.kaiming_uniform_(linear_layer.weight, a=5**0.5)
+        if linear_layer.bias is not None:
+            fan_in = input_dim
+            bound = 1 / fan_in**0.5
+        nn.init.uniform_(linear_layer.bias, -bound, bound)
+        self.probe = nn.Sequential(
+                    linear_layer,
+                    nn.Sigmoid()
+                )
+        t.manual_seed(random_state)
+        dataset = TensorDataset(t.tensor(X_train, dtype=t.float32), t.tensor(y_train, dtype=t.float32))
+        test_dataset = TensorDataset(t.tensor(X_test, dtype=t.float32), t.tensor(y_test, dtype=t.float32))
+        self.train_loader = DataLoader(dataset, batch_size=self.batch_size if self.batch_size > 0 else len(dataset), shuffle=True)
+        self.test_loader = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=False)
+        self.verbose = probe_config.verbose if probe_config else False
+        self.epochs = probe_config.epochs
+        self.best_probe = None
+
+    def fit(self):
+        optimizer = t.optim.AdamW(self.probe.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+
+        best_loss = float('inf')
+        epoch_losses = []
+        accuracies = []
+
+        # Start training
+        for epoch in range(self.nepochs):
+            epoch_loss = 0.0  # Initialize epoch loss
+
+            for x_batch, labels_batch in self.train_loader:
+                # probe
+                p = self.probe(x_batch).squeeze(-1)
+                loss = self.get_loss(p.float(), labels_batch.float())
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                epoch_loss += loss.item()
+
+            if epoch_loss < best_loss:
+                best_loss = epoch_loss
+
+            epoch_losses.append(epoch_loss)  # Track epoch loss for plotting
+            self.best_probe = copy.deepcopy(self.probe)
+            self.probe.eval()  # Set the model to evaluation mode
+            current_acc = self.get_acc()
+            accuracies.append(current_acc)
+
+        if self.verbose:
+            # Plot the training and validation loss
+            plt.figure(figsize=(10, 6))
+            plt.plot(range(1, len(epoch_losses) + 1), epoch_losses, label='Training Loss')
+            plt.plot(range(1, len(accuracies) + 1), accuracies, label='Online Accuracy', linestyle='--')
+            plt.xlabel('Epoch')
+            plt.ylabel('Loss')
+            plt.title(f'Training and Validation Loss Over Epochs Accuracy at the last step: {current_acc}')
+            plt.legend()
+            plt.grid(True)
+            plt.show()
+
+        return best_loss
+
+    def predict(self) -> t.Tensor:
+
+        with t.no_grad():                        
+            correct = 0
+            total = 0
+            for x_batch, labels_batch in self.test_loader:
+                predicted_proba = self.best_probe(x_batch).squeeze(-1)
+                predictions = (predicted_proba > 0.5).float()
+                correct += (predictions == labels_batch).sum().item()
+                total += labels_batch.size(0)
+            acc = (correct / total)
+
+            return acc, predicted_proba.flatten().cpu().numpy()
 
 def self_reporting_confidence(model: HookedTransformer,
                               prompt: str,
@@ -111,22 +196,27 @@ def orthogonal_probing(probe_config, X_train, y_train, X_test, y_test, n=100):
 
     return probabilities
 
-def recursive_probing(probe_config, model, X_train, y_train, X_test, y_test, n=100):
+def recursive_probing(probe_config, X_train, y_train, X_test, y_test, n=100):
 
         probabilities = np.zeros((X_test.shape[0], 1))
         tot_acc = 0
-        for i in range(n):
 
-            model.fit(X_train, y_train)
-            predicted_proba = model.predict(X_test)[:, 1]
+        for i in range(n):
+            model = LinearProbe(X_train, y_train, X_test, y_test,
+                                input_dim=X_train.shape[1],
+                                output_dim=1,
+                                probe_config=probe_config,
+                                random_state=i)
+            model.fit()
+            acc, predicted_proba = model.predict()[:, 1]
             
             if probe_config.log_accuracy_on_recursive:
-                predictions = predicted_proba > 0.5
-                acc = (predictions == y_test).mean()
                 tot_acc += acc
+                print(f"Run {i+1}/{n} accuracy: {acc:.4f}")
             probabilities += predicted_proba.reshape(-1, 1)
 
         probabilities /= n
+
         if probe_config.log_accuracy_on_recursive:
             print(f"Average accuracy over {n} runs: {tot_acc / n:.4f}")
 
