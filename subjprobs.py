@@ -21,6 +21,9 @@ import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+
+device = t.device("cuda" if t.cuda.is_available() else "cpu")
 
 class LinearProbe():
 
