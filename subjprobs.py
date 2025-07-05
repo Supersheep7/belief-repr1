@@ -19,45 +19,67 @@ import torch as t
 import torch.nn as nn
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, TensorDataset
+from tqdm import tqdm
+from sklearn.preprocessing import StandardScaler
 
 class LinearProbe():
 
-    def __init__(self, X_train, y_train, X_test, y_test,
-                 input_dim: int, output_dim: int = 1, 
+    def __init__(self, X_train, y_train, X_val, y_val,
+                 input_dim: int, output_dim: int = 1,
                  probe_config=None, random_state: int = 42):
 
-        linear_layer = nn.Linear(self.input_dim, 1, bias=True, random_state=random_state)       
+        self.scaler = StandardScaler()
+        X_train = self.scaler.fit_transform(X_train)
+        X_val = self.scaler.transform(X_val)
+        X_train = t.tensor(X_train, dtype=t.float32, device=device)
+        y_train = t.tensor(y_train, dtype=t.float32, device=device)
+        X_val = t.tensor(X_val, dtype=t.float32, device=device)
+        y_val = t.tensor(y_val, dtype=t.float32, device=device)
+        t.manual_seed(random_state)
+        if t.cuda.is_available():
+          t.cuda.manual_seed_all(random_state)
+        linear_layer = nn.Linear(input_dim, 1, bias=True).to(device)
         nn.init.kaiming_uniform_(linear_layer.weight, a=5**0.5)
         if linear_layer.bias is not None:
             fan_in = input_dim
             bound = 1 / fan_in**0.5
         nn.init.uniform_(linear_layer.bias, -bound, bound)
+        self.lr = probe_config.lr
+        self.weight_decay = probe_config.weight_decay
+        self.batch_size = probe_config.batch_size
         self.probe = nn.Sequential(
                     linear_layer,
                     nn.Sigmoid()
                 )
         t.manual_seed(random_state)
+        if probe_config.control:
+          y_train = y_train[t.randperm(y_train.size()[0])]
         dataset = TensorDataset(t.tensor(X_train, dtype=t.float32), t.tensor(y_train, dtype=t.float32))
-        test_dataset = TensorDataset(t.tensor(X_test, dtype=t.float32), t.tensor(y_test, dtype=t.float32))
+        val_dataset = TensorDataset(t.tensor(X_val, dtype=t.float32), t.tensor(y_val, dtype=t.float32))
         self.train_loader = DataLoader(dataset, batch_size=self.batch_size if self.batch_size > 0 else len(dataset), shuffle=True)
-        self.test_loader = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=False)
+        self.val_loader = DataLoader(val_dataset, batch_size=len(val_dataset), shuffle=False)
         self.verbose = probe_config.verbose if probe_config else False
-        self.epochs = probe_config.epochs
+        self.nepochs = probe_config.nepochs
         self.best_probe = None
+        self.patience = probe_config.patience
+
+    def get_loss(self, p, labels):
+        return t.nn.functional.binary_cross_entropy(p, labels)
 
     def fit(self):
         optimizer = t.optim.AdamW(self.probe.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-
         best_loss = float('inf')
         epoch_losses = []
         accuracies = []
 
+        patience = self.patience  # You can expose this as a class param if desired
+        epochs_no_improve = 0
+
         # Start training
-        for epoch in range(self.nepochs):
-            epoch_loss = 0.0  # Initialize epoch loss
+        for epoch in tqdm(range(self.nepochs), desc='Epochs'):
+            epoch_loss = 0.0  
 
             for x_batch, labels_batch in self.train_loader:
-                # probe
                 p = self.probe(x_batch).squeeze(-1)
                 loss = self.get_loss(p.float(), labels_batch.float())
                 optimizer.zero_grad()
@@ -65,17 +87,25 @@ class LinearProbe():
                 optimizer.step()
                 epoch_loss += loss.item()
 
+            epoch_losses.append(epoch_loss)  # Track epoch loss for plotting
+            self.probe.eval()
+
+            # Early stopping check
             if epoch_loss < best_loss:
                 best_loss = epoch_loss
-
-            epoch_losses.append(epoch_loss)  # Track epoch loss for plotting
-            self.best_probe = copy.deepcopy(self.probe)
-            self.probe.eval()  # Set the model to evaluation mode
+                self.best_probe = copy.deepcopy(self.probe)
+                epochs_no_improve = 0
+            else:
+                epochs_no_improve += 1
+            
             current_acc = self.get_acc()
             accuracies.append(current_acc)
 
+            if epochs_no_improve >= patience:
+                print(f"Early stopping triggered at epoch {epoch+1}")
+                break
+
         if self.verbose:
-            # Plot the training and validation loss
             plt.figure(figsize=(10, 6))
             plt.plot(range(1, len(epoch_losses) + 1), epoch_losses, label='Training Loss')
             plt.plot(range(1, len(accuracies) + 1), accuracies, label='Online Accuracy', linestyle='--')
@@ -88,19 +118,46 @@ class LinearProbe():
 
         return best_loss
 
-    def predict(self) -> t.Tensor:
 
-        with t.no_grad():                        
+    def predict(self, X_test, y_test) -> t.Tensor:
+        
+        X_test = self.scaler.transform(X_test)
+        X_test = t.tensor(X_test, dtype=t.float32, device=device)
+        y_test = t.tensor(y_test, dtype=t.float32, device=device)
+        with t.no_grad():
+            dataset = TensorDataset(t.tensor(X_test, dtype=t.float32), t.tensor(y_test, dtype=t.float32))
+            test_loader = DataLoader(dataset, batch_size=self.batch_size if self.batch_size > 0 else len(dataset), shuffle=True)
             correct = 0
             total = 0
-            for x_batch, labels_batch in self.test_loader:
+            all_probs = []
+
+            for x_batch, labels_batch in test_loader:
+                predicted_proba = self.best_probe(x_batch).squeeze(-1)
+                predictions = (predicted_proba > 0.5).float()
+
+                correct += (predictions == labels_batch).sum().item()
+                total += labels_batch.size(0)
+
+                all_probs.append(predicted_proba)
+
+            acc = correct / total
+            all_probs = t.cat(all_probs, dim=0)  # Concatenate all batches into one tensor
+
+        return acc, all_probs.cpu().numpy()
+
+    def get_acc(self) -> t.Tensor:
+
+        with t.no_grad():
+            correct = 0
+            total = 0
+            for x_batch, labels_batch in self.val_loader:
                 predicted_proba = self.best_probe(x_batch).squeeze(-1)
                 predictions = (predicted_proba > 0.5).float()
                 correct += (predictions == labels_batch).sum().item()
                 total += labels_batch.size(0)
             acc = (correct / total)
 
-            return acc, predicted_proba.flatten().cpu().numpy()
+            return acc
 
 def self_reporting_confidence(model: HookedTransformer,
                               prompt: str,
@@ -130,8 +187,8 @@ def self_reporting_confidence(model: HookedTransformer,
 def logit_confidence(model: HookedTransformer,
                     prompt: str,
                     context: str = 'You are a helpful assistant. You will receive a statement. You will be asked whether the answer is correct. ONLY answer "True" or "False". I will provide three examples. \n',
-                    shots: List[str] = ['Paris is the capital of France. This statement is: True.\n', 
-                                        'The richest person in the earth is George Clooney. This statement is: False.\n', 
+                    shots: List[str] = ['Paris is the capital of France. This statement is: True.\n',
+                                        'The richest person in the earth is George Clooney. This statement is: False.\n',
                                         'Milan is the capital of Italy. This statement is: False.\n'],
                     device: str = "cuda") -> Float:
     with t.amp.autocast('cuda'):
@@ -149,12 +206,12 @@ def logit_confidence(model: HookedTransformer,
       normalized_p_true = p_true / (p_true + p_false)
       normalized_p_false = p_false / (p_true + p_false)
       truth_value = 'True' if normalized_p_true > normalized_p_false else 'False'
-      
+
     return truth_value, max(normalized_p_true, normalized_p_false)
 
 # On latent representations
 
-def probe_confidence(activations: t.Tensor, trained_probe, probe_type='logistic') -> Float: 
+def probe_confidence(activations: t.Tensor, trained_probe, probe_type='logistic') -> Float:
     """
     Computes the confidence score using a trained probe or a set thereof on an activation batch.
     """
@@ -172,9 +229,9 @@ def probe_confidence(activations: t.Tensor, trained_probe, probe_type='logistic'
 
 def orthogonal_probing(probe_config, X_train, y_train, X_test, y_test, n=100):
 
-    probabilities = np.zeros((X_test.shape[0], n))
+    probabilities = np.zeros((X_test.flatten().shape[0], n))
     directions = []
-    for i in range(n):  
+    for i in range(n):
         logreg = LogisticRegression(max_iter=probe_config.max_iter,
                                     solver="lbfgs",
                                     C=probe_config.C,
@@ -198,22 +255,22 @@ def orthogonal_probing(probe_config, X_train, y_train, X_test, y_test, n=100):
 
 def recursive_probing(probe_config, X_train, y_train, X_test, y_test, n=100):
 
-        probabilities = np.zeros((X_test.shape[0], 1))
+        probabilities = np.zeros((X_test.shape[0]))
         tot_acc = 0
-
+        X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=probe_config.test_size, random_state=probe_config.seed)
         for i in range(n):
-            model = LinearProbe(X_train, y_train, X_test, y_test,
+            model = LinearProbe(X_train, y_train, X_val, y_val,
                                 input_dim=X_train.shape[1],
                                 output_dim=1,
                                 probe_config=probe_config,
                                 random_state=i)
             model.fit()
-            acc, predicted_proba = model.predict()[:, 1]
-            
+            acc, predicted_proba = model.predict(X_test, y_test)
+
             if probe_config.log_accuracy_on_recursive:
                 tot_acc += acc
                 print(f"Run {i+1}/{n} accuracy: {acc:.4f}")
-            probabilities += predicted_proba.reshape(-1, 1)
+            probabilities += predicted_proba
 
         probabilities /= n
 
@@ -221,11 +278,11 @@ def recursive_probing(probe_config, X_train, y_train, X_test, y_test, n=100):
             print(f"Average accuracy over {n} runs: {tot_acc / n:.4f}")
 
         return probabilities
-    
+
 class JudgeCoherence():
 
     def __init__(self, logic: str = None, metric: callable = None):
-        
+
         self.logic = None
         self.metric = None
 
@@ -240,7 +297,7 @@ class JudgeCoherence():
         proba1 = t.tensor(proba1)
         proba2 = t.tensor(proba2)
         return t.nn.functional.cosine_similarity(proba1, proba2, dim=-1)
-    
+
     def kl_metric(self, proba1: t.Tensor, proba2: t.Tensor) -> Float:
         '''
         Computes the KL divergence between two probability distributions.
@@ -256,7 +313,7 @@ class JudgeCoherence():
         proba1 = t.tensor(proba1)
         proba2 = t.tensor(proba2)
         return t.sqrt(t.mean((proba1 - proba2) ** 2))
-    
+
     def aggregate_euclidean_metric(self, proba1: t.Tensor, proba2: t.Tensor) -> Float:
         '''
         Computes the Euclidean distance between two probability distributions.
