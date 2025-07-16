@@ -22,8 +22,37 @@ from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+
 
 device = t.device("cuda" if t.cuda.is_available() else "cpu")
+
+def circular_mean(thetas, performances):
+
+    thetas = np.array(thetas)
+    performances = np.array(performances)
+    sum_weights = np.sum(performances)
+    x = np.sum(np.sqrt(performances) * np.cos(thetas)) / sum_weights
+    y = np.sum(np.sqrt(performances) * np.sin(thetas)) / sum_weights
+    theta = np.arctan2(y, x)
+
+    return theta
+
+class FixedLinear(nn.Module):
+    def __init__(self, weight, bias=None):
+        super(FixedLinear, self).__init__()
+        self.weight = nn.Parameter(weight, requires_grad=False)
+        if bias is not None:
+            self.bias = nn.Parameter(bias, requires_grad=False)
+        else:
+            self.bias = None
+
+    def forward(self, x):
+        if self.bias is not None:
+            return t.matmul(x, self.weight.T) + self.bias
+        else:
+            return t.matmul(x, self.weight.T)
 
 class LinearProbe():
 
@@ -31,9 +60,6 @@ class LinearProbe():
                  input_dim: int, output_dim: int = 1,
                  probe_config=None, random_state: int = 42):
 
-        self.scaler = StandardScaler()
-        X_train = self.scaler.fit_transform(X_train)
-        X_val = self.scaler.transform(X_val)
         X_train = t.tensor(X_train, dtype=t.float32, device=device)
         y_train = t.tensor(y_train, dtype=t.float32, device=device)
         X_val = t.tensor(X_val, dtype=t.float32, device=device)
@@ -41,12 +67,12 @@ class LinearProbe():
         t.manual_seed(random_state)
         if t.cuda.is_available():
           t.cuda.manual_seed_all(random_state)
-        linear_layer = nn.Linear(input_dim, 1, bias=True).to(device)
+        linear_layer = nn.Linear(input_dim, 1, bias=False).to(device)
         nn.init.kaiming_uniform_(linear_layer.weight, a=5**0.5)
         if linear_layer.bias is not None:
             fan_in = input_dim
             bound = 1 / fan_in**0.5
-        nn.init.uniform_(linear_layer.bias, -bound, bound)
+            nn.init.uniform_(linear_layer.bias, -bound, bound)
         self.lr = probe_config.lr
         self.weight_decay = probe_config.weight_decay
         self.batch_size = probe_config.batch_size
@@ -69,6 +95,14 @@ class LinearProbe():
     def get_loss(self, p, labels):
         return t.nn.functional.binary_cross_entropy(p, labels)
 
+    def get_direction(self):
+        """
+        Returns the direction of the probe in the input space.
+        """
+        with t.no_grad():
+            direction = self.best_probe[0].weight.squeeze(0)
+            return direction.cpu().numpy()
+
     def fit(self):
         optimizer = t.optim.AdamW(self.probe.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         best_loss = float('inf')
@@ -80,7 +114,7 @@ class LinearProbe():
 
         # Start training
         for epoch in tqdm(range(self.nepochs), desc='Epochs'):
-            epoch_loss = 0.0  
+            epoch_loss = 0.0
 
             for x_batch, labels_batch in self.train_loader:
                 p = self.probe(x_batch).squeeze(-1)
@@ -100,7 +134,7 @@ class LinearProbe():
                 epochs_no_improve = 0
             else:
                 epochs_no_improve += 1
-            
+
             current_acc = self.get_acc()
             accuracies.append(current_acc)
 
@@ -123,8 +157,7 @@ class LinearProbe():
 
 
     def predict(self, X_test, y_test) -> t.Tensor:
-        
-        X_test = self.scaler.transform(X_test)
+
         X_test = t.tensor(X_test, dtype=t.float32, device=device)
         y_test = t.tensor(y_test, dtype=t.float32, device=device)
         with t.no_grad():
@@ -185,7 +218,7 @@ def self_reporting_confidence(model: HookedTransformer,
       else:
           confidence = 'NaN'
 
-    return truth_value, confidence
+    return truth_value, max(confidence, 1-confidence)
 
 def logit_confidence(model: HookedTransformer,
                     prompt: str,
@@ -230,39 +263,42 @@ def probe_confidence(activations: t.Tensor, trained_probe, probe_type='logistic'
 
     return confidence
 
-def orthogonal_probing(probe_config, X_train, y_train, X_test, y_test, n=100):
+def orthogonal_probing(probe_config, X_train, y_train, X_test, y_test, fix_direction=None, n=100):
 
-    probabilities = np.zeros((X_test.flatten().shape[0], n))
+    probabilities = np.zeros((X_test.shape[0], n))
     directions = []
+    if fix_direction is not None:
+        directions.append(fix_direction)
+    accuracies = []
     for i in range(n):
-        logreg = LogisticRegression(max_iter=probe_config.max_iter,
-                                    solver="lbfgs",
-                                    C=probe_config.C,
-                                    random_state=42,
-                                    n_jobs=-1,
-                                    fit_intercept=False)
         for direction in directions:
             # Orthogonal constraint
+            if type(direction) == t.Tensor:
+                direction = direction.cpu().numpy()
+            elif type(X_train) == t.Tensor:
+                direction = direction.cpu().numpy()
             projected = np.dot(X_train, direction)
             X_train = X_train - np.outer(projected, direction) / np.dot(direction, direction)
-        logreg.fit(X_train, y_train)
-        directions.append(logreg.coef_.flatten())
-        predicted_proba = logreg.predict_proba(X_test)[:, 1]
-        probabilities[:, i] = predicted_proba
+        probe = LinearProbe(X_train, y_train, X_test, y_test,
+                                input_dim=X_train.shape[1],
+                                output_dim=1,
+                                probe_config=probe_config,
+                                random_state=i)
+        probe.fit()
+        acc, run_probs = probe.predict(X_test, y_test)
+        directions.append(probe.get_direction())
         if probe_config.log_accuracy_on_recursive:
-            predictions = logreg.predict(X_test)
-            acc = (predictions == y_test).mean()
-            print(f"Run {i+1}/{n} accuracy: {acc:.4f}")
+                print(f"Run {i+1}/{n} accuracy: {acc:.4f}")
+                accuracies.append(acc)
 
-    return probabilities
+    return accuracies
 
 def recursive_probing(probe_config, X_train, y_train, X_test, y_test, n=100):
 
         probabilities = np.zeros((X_test.shape[0]))
         tot_acc = 0
-        X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=probe_config.test_size, random_state=probe_config.seed)
         for i in range(n):
-            model = LinearProbe(X_train, y_train, X_val, y_val,
+            model = LinearProbe(X_train, y_train, X_test, y_test,
                                 input_dim=X_train.shape[1],
                                 output_dim=1,
                                 probe_config=probe_config,
@@ -282,9 +318,41 @@ def recursive_probing(probe_config, X_train, y_train, X_test, y_test, n=100):
 
         return probabilities
 
+def form_master_probe(probe_config, X_train, y_train, X_test, y_test, n=100, circular=False, pca=False):
+
+        directions = []
+        performances = []
+        for i in range(n):
+            model = LinearProbe(X_train, y_train, X_test, y_test,
+                                input_dim=X_train.shape[1],
+                                output_dim=1,
+                                probe_config=probe_config,
+                                random_state=i)
+            model.fit()
+            acc, run_probs = model.predict(X_test, y_test)
+            direction = model.get_direction()
+            directions.append(direction)
+
+            if probe_config.log_accuracy_on_recursive:
+                print(f"Run {i+1}/{n} accuracy: {acc:.4f}")
+                performances.append(acc)
+        if pca:
+          directions /= np.linalg.norm(directions, axis=1, keepdims=True)
+          my_pca = PCA(n_components=1)
+          pc0 = my_pca.fit(directions).components_[0]
+          avg_direction = t.tensor(pc0, dtype=t.float32, device=device)
+        else:
+          avg_direction = circular_mean(thetas=directions, performances=performances) if circular else np.average(directions, weights=performances, axis=0)
+          avg_direction = t.tensor(avg_direction, dtype=t.float32, device=device)
+
+        return nn.Sequential(
+                    FixedLinear(avg_direction),
+                    nn.Sigmoid()
+                ), directions
+
 class JudgeCoherence():
 
-    def __init__(self, logic: str = None, metric: callable = None):
+    def __init__(self, logic: str = None):
 
         self.logic = None
         self.metric = None
@@ -324,6 +392,14 @@ class JudgeCoherence():
         proba1 = t.tensor(proba1)
         proba2 = t.tensor(proba2)
         return t.norm(proba1 - proba2, p=2)
+    
+    def less_than_perc(self, proba1: t.Tensor, proba2: t.Tensor) -> Float:
+        '''
+        Computes the percentage of elements in proba1 that are less than the corresponding elements in proba2.
+        '''
+        proba1 = t.tensor(proba1)
+        proba2 = t.tensor(proba2)
+        return (proba1 < proba2).float().mean().item()
 
     def set_metric(self, metric: callable):
         '''
@@ -336,7 +412,7 @@ class JudgeCoherence():
     def judge(self, proba: list) -> Float:
 
         if self.logic == 'neg':
-            return self.metric(proba[0] + proba[1])
+            return self.metric(proba[0] + proba[1], t.ones_like(proba[0]))
         elif self.logic in ['disj', 'conj', 'datasets']:
             return self.metric(proba[0], proba[1])
         elif self.logic == 'infe':

@@ -445,9 +445,10 @@ def probe_sweep(list_of_datasets: List,
                                     x_test=X_test, labels_test=y_test,
                                     probe_cfg=probe_cfg)
         else:
+        
             x0, x1 = dataset[0], dataset[1]
-            x0 = einops.rearrange(x0, 'n b d -> (n b) d')
-            x1 = einops.rearrange(x1, 'n b d -> (n b) d')
+            x0 = einops.rearrange(x0, 'n b d -> (n b) d').to(device)
+            x1 = einops.rearrange(x1, 'n b d -> (n b) d').to(device)
             x0_train, x0_test, x1_train, x1_test, _, y_test = train_test_split(x0, x1, labels, test_size=probe_cfg.test_size, random_state=probe_cfg.seed)
             probe = UnsupervisedProbe(x0_train=x0_train, x1_train=x1_train,
                                     x0_test=x0_test, x1_test=x1_test, labels=y_test,
