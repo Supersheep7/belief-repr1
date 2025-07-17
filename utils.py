@@ -20,7 +20,7 @@ from torch.amp import autocast
 from tqdm import tqdm
 from datasets import Dataset
 from transformers import TrainingArguments, Trainer, EarlyStoppingCallback
-
+import pandas as pd
 
 
 def decompose_mha(mha_batch: Float[t.Tensor, "n_batch batch_size n_head d_head"]
@@ -413,5 +413,52 @@ def get_top_heads(accuracies, n=5):
 
     return top_heads, top_values
 
+def stratified_sample(df, stratify_col, cutoff, random_state=None):
+    groups = df[stratify_col].unique()
+    n_groups = len(groups)
+
+    base_sample = cutoff // n_groups
+    extra = cutoff % n_groups
+
+    # Initial assignment
+    sample_counts = {group: base_sample for group in groups}
+    for group in np.random.choice(groups, extra, replace=False):
+        sample_counts[group] += 1
+
+    # Step 1: First pass — handle groups with insufficient size
+    actual_counts = {}
+    remaining = 0
+    eligible_for_redistribution = []
+
+    for group in groups:
+        group_df = df[df[stratify_col] == group]
+        available = len(group_df)
+        desired = sample_counts[group]
+
+        if available < desired:
+            actual_counts[group] = available
+            remaining += desired - available
+        else:
+            actual_counts[group] = desired
+            eligible_for_redistribution.append(group)
+
+    # Step 2: Redistribute the shortfall
+    while remaining > 0 and eligible_for_redistribution:
+        np.random.shuffle(eligible_for_redistribution)
+        for group in eligible_for_redistribution:
+            group_df = df[df[stratify_col] == group]
+            if actual_counts[group] < len(group_df):
+                actual_counts[group] += 1
+                remaining -= 1
+                if remaining == 0:
+                    break
+
+    # Step 3: Sample
+    samples = []
+    for group, n in actual_counts.items():
+        group_df = df[df[stratify_col] == group]
+        samples.append(group_df.sample(n=n, random_state=random_state))
+
+    return pd.concat(samples).reset_index(drop=True)
 
 

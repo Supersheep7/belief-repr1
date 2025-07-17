@@ -206,17 +206,19 @@ def self_reporting_confidence(model: HookedTransformer,
     Computes the self-reporting probabilities for a batch of tokens using a pre-trained model.
     """
 
-    with t.amp.autocast('cuda'):
+    with t.autocast('cuda'):
       context = context
       shots = '\n'.join(shots)
       full_prompt = context + shots + '\n' + prompt
       answer = generate(model=model, prompt=full_prompt, temperature=0, max_length=10)
-      truth_value = answer.split()[0]
       match = re.search(r'\d+\.\d+', answer)
       if match:
+          truth_value = answer.split()[0]
           confidence = float(match.group())
       else:
-          confidence = 'NaN'
+          print(f"Warning: No confidence score found in the answer: {answer}")
+          confidence = 0.5
+          truth_value = 0.5
 
     return truth_value, max(confidence, 1-confidence)
 
@@ -354,7 +356,7 @@ class JudgeCoherence():
 
     def __init__(self, logic: str = None):
 
-        self.logic = None
+        self.logic = logic
         self.metric = None
 
     def set_logic(self, logic: str):
@@ -400,6 +402,14 @@ class JudgeCoherence():
         proba1 = t.tensor(proba1)
         proba2 = t.tensor(proba2)
         return (proba1 < proba2).float().mean().item()
+
+    def avg_conf_diff(self, proba1: t.Tensor, proba2: t.Tensor) -> Float:
+        '''
+        Computes the average difference between the confidence scores of two probability distributions.
+        '''
+        proba1 = t.tensor(proba1)
+        proba2 = t.tensor(proba2)
+        return (proba1 - proba2).abs().mean().item()
 
     def set_metric(self, metric: callable):
         '''
