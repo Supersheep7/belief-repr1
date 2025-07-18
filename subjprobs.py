@@ -219,8 +219,12 @@ def self_reporting_confidence(model: HookedTransformer,
           print(f"Warning: No confidence score found in the answer: {answer}")
           confidence = 0.5
           truth_value = 0.5
+    confidence = max(confidence, 1-confidence)  # Ensure the model is not reporting inverse confidence
 
-    return truth_value, max(confidence, 1-confidence)
+    if re.fullmatch(r'(Ġ)?(False|false|FALSE)(\.)?', truth_value):
+        confidence = 1 - confidence # If the model says False, we invert the confidence to reflect the belief in the truth of the statement.
+
+    return truth_value, confidence
 
 def logit_confidence(model: HookedTransformer,
                     prompt: str,
@@ -245,7 +249,7 @@ def logit_confidence(model: HookedTransformer,
       normalized_p_false = p_false / (p_true + p_false)
       truth_value = 'True' if normalized_p_true > normalized_p_false else 'False'
 
-    return truth_value, max(normalized_p_true, normalized_p_false)
+    return truth_value, normalized_p_true
 
 # On latent representations
 
@@ -364,40 +368,34 @@ class JudgeCoherence():
         self.logic = logic
 
     def cosine_metric(self, proba1: t.Tensor, proba2: t.Tensor) -> Float:
-        '''
-        Computes the cosine distance between two probability distributions.
-        '''
+
         proba1 = t.tensor(proba1)
         proba2 = t.tensor(proba2)
         return t.nn.functional.cosine_similarity(proba1, proba2, dim=-1)
 
     def kl_metric(self, proba1: t.Tensor, proba2: t.Tensor) -> Float:
-        '''
-        Computes the KL divergence between two probability distributions.
-        '''
+
         proba1 = t.tensor(proba1)
         proba2 = t.tensor(proba2)
         return t.nn.functional.kl_div(t.log_softmax(proba1, dim=-1), t.softmax(proba2, dim=-1), reduction='batchmean')
 
     def rmse_metric(self, proba1: t.Tensor, proba2: t.Tensor) -> Float:
-        '''
-        Computes the RMSE between two probability distributions.
+        ''' 
+        Standard for neg logic.
         '''
         proba1 = t.tensor(proba1)
         proba2 = t.tensor(proba2)
         return t.sqrt(t.mean((proba1 - proba2) ** 2))
 
     def aggregate_euclidean_metric(self, proba1: t.Tensor, proba2: t.Tensor) -> Float:
-        '''
-        Computes the Euclidean distance between two probability distributions.
-        '''
+
         proba1 = t.tensor(proba1)
         proba2 = t.tensor(proba2)
         return t.norm(proba1 - proba2, p=2)
     
     def less_than_perc(self, proba1: t.Tensor, proba2: t.Tensor) -> Float:
         '''
-        Computes the percentage of elements in proba1 that are less than the corresponding elements in proba2.
+        Standard for conj/neg/ent/ent* logic.
         '''
         proba1 = t.tensor(proba1)
         proba2 = t.tensor(proba2)
@@ -405,25 +403,23 @@ class JudgeCoherence():
 
     def avg_conf_diff(self, proba1: t.Tensor, proba2: t.Tensor) -> Float:
         '''
-        Computes the average difference between the confidence scores of two probability distributions.
+        Standard for cross-dataset logic.
         '''
         proba1 = t.tensor(proba1)
         proba2 = t.tensor(proba2)
         return (proba1 - proba2).abs().mean().item()
 
     def set_metric(self, metric: callable):
-        '''
-        A metric is a function that takes in a list/tensor of probabilities and returns a single float value.
-        This can be performed in terms of distance metrics wrt an ideal agent
-        Watch out: depending on the logic, the metric may take in different number of arguments.
-        '''
+
         self.metric = metric
 
     def judge(self, proba: list) -> Float:
 
         if self.logic == 'neg':
             return self.metric(proba[0] + proba[1], t.ones_like(proba[0]))
-        elif self.logic in ['disj', 'conj', 'datasets']:
+        elif self.logic in ['disj', 'conj', 'datasets', 'ent*']:
             return self.metric(proba[0], proba[1])
-        elif self.logic == 'infe':
-            return self.metric(proba[0], proba[1], proba[2])
+        elif self.logic == 'ent':
+            return self.metric(proba[0]*proba[1], proba[2])     
+        # TRUE case: proba[0] == P(phi); proba[1] == P(phi -> psi); proba[2] == P(psi)
+        # FALSE case: proba[0] == P(psi); proba[1] == P(phi -> psi); proba[2] == P(psi)
