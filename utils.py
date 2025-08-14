@@ -460,5 +460,3 @@ def stratified_sample(df, stratify_col, cutoff, random_state=None):
         samples.append(group_df.sample(n=n, random_state=random_state))
 
     return pd.concat(samples).reset_index(drop=True)
-
-

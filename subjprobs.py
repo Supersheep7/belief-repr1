@@ -24,6 +24,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
+import openai
 
 
 device = t.device("cuda" if t.cuda.is_available() else "cpu")
@@ -228,15 +229,13 @@ def self_reporting_confidence(model: HookedTransformer,
 
 def logit_confidence(model: HookedTransformer,
                     prompt: str,
-                    context: str = 'You are a helpful assistant. You will receive a statement. You will be asked whether the answer is correct. ONLY answer "True" or "False". I will provide three examples. \n',
-                    shots: List[str] = ['Paris is the capital of France. This statement is: True.\n',
-                                        'The richest person in the earth is George Clooney. This statement is: False.\n',
-                                        'Milan is the capital of Italy. This statement is: False.\n'],
+                    context: str = '',
+                    shots: List[str] = '',
                     device: str = "cuda") -> Float:
     with t.amp.autocast('cuda'):
       true_token_ids = [model.tokenizer.convert_tokens_to_ids(token) for token in ['true', 'True', 'TRUE', 'Ġtrue', 'ĠTrue', 'ĠTRUE']]
       false_token_ids = [model.tokenizer.convert_tokens_to_ids(token) for token in ['false', 'False', 'FALSE', 'Ġfalse', 'ĠFalse', 'ĠFALSE']]
-      full_prompt = context + ''.join(shots) + prompt
+      full_prompt = context + '\n'.join(shots) + '\n' + f'{prompt}\nAnswer:'
       tokens = model.to_tokens(full_prompt)
       logits = model(tokens)
       log_probs = t.nn.functional.log_softmax(logits, dim=-1)
@@ -248,7 +247,10 @@ def logit_confidence(model: HookedTransformer,
       normalized_p_true = p_true / (p_true + p_false)
       normalized_p_false = p_false / (p_true + p_false)
       truth_value = 'True' if normalized_p_true > normalized_p_false else 'False'
-
+      if p_true + p_false < 0.05:
+          # If the model is not confident, we set the truth value to 0.5
+          print("Warning: model underconfident")
+          normalized_p_true = 0.5
     return truth_value, normalized_p_true
 
 # On latent representations
@@ -385,7 +387,7 @@ class JudgeCoherence():
         '''
         proba1 = t.tensor(proba1)
         proba2 = t.tensor(proba2)
-        return t.sqrt(t.mean((proba1 - proba2) ** 2))
+        return t.mean((proba1 - proba2) ** 2)
 
     def aggregate_euclidean_metric(self, proba1: t.Tensor, proba2: t.Tensor) -> Float:
 
@@ -419,7 +421,49 @@ class JudgeCoherence():
             return self.metric(proba[0] + proba[1], t.ones_like(proba[0]))
         elif self.logic in ['disj', 'conj', 'datasets', 'ent*']:
             return self.metric(proba[0], proba[1])
+        # Disj case: proba[0] < proba[1]
+        # Conj case: proba[0] > proba[1]
+        # Dataset case: mean(proba[0]) < mean(proba[1]) where proba[0] is the target dataset and proba[1] is the source dataset
         elif self.logic == 'ent':
             return self.metric(proba[0]*proba[1], proba[2])     
         # TRUE case: proba[0] == P(phi); proba[1] == P(phi -> psi); proba[2] == P(psi)
         # FALSE case: proba[0] == P(psi); proba[1] == P(phi -> psi); proba[2] == P(psi)
+
+def to_confidence(probs):
+    probs = t.tensor(probs, dtype=t.float32, device=device)
+    pointfives = t.full_like(probs, 0.5, device=device)
+    probs = t.abs(probs - pointfives) * 2
+    return probs 
+
+def bin_proba(probs):
+    '''
+    bins tensor in 10 different bins
+    '''
+    probs = t.tensor(probs, dtype=t.float32, device=device)
+    bins = t.linspace(0, 1, steps=11, device=device)
+    binned_probs = t.bucketize(probs, bins) - 1  # -1 to make it zero-indexed
+    return binned_probs
+
+def check_calibration(probs, labels):
+
+    probs = t.tensor(probs, dtype=t.float32, device=device)
+
+def compute_ece(probs, labels, n_bins=10):
+    """Compute Expected Calibration Error (ECE)"""
+    probs = np.array(probs)
+    labels = np.array(labels)
+    bin_edges = np.linspace(0, 1, n_bins + 1)
+    ece = 0.0
+    total = len(probs)
+
+    for i in range(n_bins):
+        bin_lower, bin_upper = bin_edges[i], bin_edges[i+1]
+        in_bin = (probs > bin_lower) & (probs <= bin_upper)
+        bin_size = np.sum(in_bin)
+        if bin_size > 0:
+            bin_probs = probs[in_bin]
+            bin_labels = labels[in_bin]
+            avg_conf = np.mean(bin_probs)
+            avg_acc = np.mean(bin_labels)
+            ece += (bin_size / total) * np.abs(avg_conf - avg_acc)
+    return ece
