@@ -302,7 +302,15 @@ def pretty_line_mass(
     labels=None,
     title="Probe Accuracy on Residual Stream",
     x_axis="Layers",
-    y_axis="Accuracy"
+    y_axis="Accuracy",
+    colors = ['#007acc', '#007acc', 
+              '#d62728', '#d62728', 
+              '#2ca02c', '#2ca02c', 
+              '#9467bd', '#9467bd', 
+              '#8c564b', '#8c564b', 
+              '#e377c2', '#e377c2', 
+              '#7f7f7f', '#7f7f7f'],
+    markers = ['o', '^']
 ):
     """
     Create a pretty line plot with any number of lines.
@@ -317,14 +325,8 @@ def pretty_line_mass(
     fig, ax = plt.subplots(figsize=(12, 8), facecolor='w')
     ax.set_facecolor('#e0e0e0') 
 
-    colors = ['#007acc', '#007acc', 
-              '#d62728', '#d62728', 
-              '#2ca02c', '#2ca02c', 
-              '#9467bd', '#9467bd', 
-              '#8c564b', '#8c564b', 
-              '#e377c2', '#e377c2', 
-              '#7f7f7f', '#7f7f7f']
-    markers = ['o', '^']
+    colors = colors
+    markers = markers
     num_lines = len(lines)
     
     if labels is None:

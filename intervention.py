@@ -12,7 +12,7 @@ from typing import List, Tuple, Dict
 import numpy as np
 import functools
 import openai
-from shots import get_shots
+from legacy.shots import get_shots
 
 '''
 = = = = = = = = = = = = = = = = Intervention = = = = = = = = = = = = = = = =
