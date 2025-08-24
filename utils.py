@@ -399,33 +399,30 @@ def finetune_model(model, df, input_col, target_col, epochs=3, batch_size=16, lr
     return model
 
 def get_top_heads(accuracies, n=5):
-    # Number of top elements to extract
+    
+    '''
+    For intervention analysis: given a matrix of accuracies (layers x heads), return the top n heads and their corresponding accuracies
+    '''
 
-    # Flatten the matrix and get the indices of the top n values
     flat_indices = np.argpartition(accuracies.flatten(), -n)[-n:]
-
-    # Convert the flat indices to 2D coordinates
     coordinates = np.array(np.unravel_index(flat_indices, accuracies.shape)).T
-
-    # Sort coordinates by value in descending order
     top_heads = coordinates[np.argsort(-accuracies[tuple(coordinates.T)])]
     top_values = accuracies[tuple(top_heads.T)]
 
     return top_heads, top_values
 
 def stratified_sample(df, stratify_col, cutoff, random_state=None):
+    '''
+    For dataset reduction: given a dataframe, a column to stratify on, and a cutoff number of samples
+    '''
     groups = df[stratify_col].unique()
     n_groups = len(groups)
 
     base_sample = cutoff // n_groups
     extra = cutoff % n_groups
-
-    # Initial assignment
     sample_counts = {group: base_sample for group in groups}
     for group in np.random.choice(groups, extra, replace=False):
         sample_counts[group] += 1
-
-    # Step 1: First pass — handle groups with insufficient size
     actual_counts = {}
     remaining = 0
     eligible_for_redistribution = []
@@ -442,7 +439,6 @@ def stratified_sample(df, stratify_col, cutoff, random_state=None):
             actual_counts[group] = desired
             eligible_for_redistribution.append(group)
 
-    # Step 2: Redistribute the shortfall
     while remaining > 0 and eligible_for_redistribution:
         np.random.shuffle(eligible_for_redistribution)
         for group in eligible_for_redistribution:
@@ -453,7 +449,6 @@ def stratified_sample(df, stratify_col, cutoff, random_state=None):
                 if remaining == 0:
                     break
 
-    # Step 3: Sample
     samples = []
     for group, n in actual_counts.items():
         group_df = df[df[stratify_col] == group]
