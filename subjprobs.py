@@ -217,6 +217,11 @@ def logit_confidence(model: HookedTransformer,
                     context: str = '',
                     shots: List[str] = '',
                     device: str = "cuda") -> Float:
+    
+    """
+    Computes the logit-based probabilities for a batch of tokens using a pre-trained model.
+    """
+
     with t.amp.autocast('cuda'):
       true_token_ids = [model.tokenizer.convert_tokens_to_ids(token) for token in ['true', 'True', 'TRUE', 'Ġtrue', 'ĠTrue', 'ĠTRUE']]
       false_token_ids = [model.tokenizer.convert_tokens_to_ids(token) for token in ['false', 'False', 'FALSE', 'Ġfalse', 'ĠFalse', 'ĠFALSE']]

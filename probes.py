@@ -46,12 +46,19 @@ class MLPProbe(nn.Module):
     def __init__(self, d):
         super().__init__()
         self.linear1 = nn.Linear(d, d//2)
-        self.linear2 = nn.Linear(d//2, 1)
+        self.linear2 = nn.Linear(d//2, d//4)
+        self.linear3 = nn.Linear(d//4, d//8)
+        self.linear4 = nn.Linear(d//8, 1)
 
     def forward(self, x):
-        h = t.relu(self.linear1(x))
-        o = self.linear2(h)
-        return t.sigmoid(o)
+        x = self.linear1(x)
+        x = t.relu(x)
+        x = self.linear2(x)
+        x = t.relu(x)
+        x = self.linear3(x)
+        x = t.relu(x)
+        x = self.linear4(x)
+        return t.sigmoid(x)
 
 class Probe(object):
 
@@ -137,11 +144,11 @@ class Probe(object):
                                             n_jobs=-1)
         else:
             if self.supervision_type == "S":
-                x_train = self.x.clone().detach()
-                y_train = self.labels_train.clone().detach()
+                x_train = self.x.clone().float().to(device)
+                y_train = self.labels_train.clone().float().to(device)
                 dataset = TensorDataset(x_train, y_train)
-                X_test = self.X_test.clone().detach()
-                y_test = self.labels_test.clone().detach()
+                X_test = self.X_test.clone().float().to(device)
+                y_test = self.labels_test.clone().float().to(device)
                 test_dataset = TensorDataset(X_test, y_test)
             else:
                 x0_train = self.x0_train.clone().detach()

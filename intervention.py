@@ -16,38 +16,33 @@ import openai
 '''
 
 def generate(model, prompt, max_length=50, temperature=0.0, top_k=None):
-    if temperature == 0:
-      assert temperature == 0, "Temperature should always be 0 for deterministic behavior."
+
     with t.no_grad():
-      tokens = model.to_tokens(prompt)
-      generated_tokens = tokens.clone()
-      for _ in range(max_length):
-          logits = model(generated_tokens)
-          next_token_logits = logits[0, -1, :]
-          if temperature > 0:
-            next_token_logits /= temperature
+        tokens = model.to_tokens(prompt)
+        generated_tokens = tokens.clone()
+        for _ in range(max_length):
+            logits = model(generated_tokens)
+            next_token_logits = logits[0, -1, :]
+            if temperature > 0:
+                next_token_logits /= temperature
 
-          if top_k is not None:
-              top_k_values, _ = t.topk(next_token_logits, top_k)
-              threshold = top_k_values[-1]
-              next_token_logits[next_token_logits < threshold] = -float('inf')
+            if top_k is not None:
+                top_k_values, _ = t.topk(next_token_logits, top_k)
+                threshold = top_k_values[-1]
+                next_token_logits[next_token_logits < threshold] = -float('inf')
 
-          probabilities = t.nn.functional.softmax(next_token_logits, dim=-1)
-          if temperature != 0:
+            probabilities = t.nn.functional.softmax(next_token_logits, dim=-1)
+            if temperature != 0:
               next_token = t.multinomial(probabilities, num_samples=1)
-          else:
+              append = next_token.unsqueeze(0)
+            else:
               next_token = t.argmax(probabilities)
-              # print(next_token)
-          generated_tokens = t.cat([generated_tokens, next_token.unsqueeze(0).unsqueeze(0)], dim=1)
-          if next_token.item() == model.tokenizer.eos_token_id:
-              break
-      generated_text = model.tokenizer.decode(generated_tokens[0, len(tokens[0]):])
-      del logits
-      del probabilities
-      del generated_tokens
-      del next_token
-      t.cuda.empty_cache()
-      t.cuda.ipc_collect()
+              append = next_token.unsqueeze(0).unsqueeze(0)  
+            # print("Next token:", model.tokenizer.decode(next_token))
+            generated_tokens = t.cat([generated_tokens, append], dim=1)
+            if next_token.item() == model.tokenizer.eos_token_id:
+                break
+        generated_text = model.tokenizer.decode(generated_tokens[0, len(tokens[0]):])
     return generated_text
 
 
@@ -188,7 +183,7 @@ def intervention_on_residual(
         if half:
             direction = direction.clone().detach().half()
         steering = functools.partial(steering_residual_hook, direction=direction, alpha=alpha, top_features=top_features)
-        model.add_hook(f"blocks.{layer}.hook_resid_mid", steering)
+        model.add_hook(f"blocks.{layer}.hook_resid_post ", steering)
 
     return model
 
@@ -317,6 +312,7 @@ def mass_truth_assignment_eval(
     total_prob_diff = 0.0
     considered_statements = len(statements)
     for statement, label in zip(statements, labels):
+        # Rembember to check if the newlines lead to correct answers
         prompt = f"The sky is blue. This sentence is: True \n The earth is flat. This sentence is: False \n {statement}"
         correct, prob_diff = truth_assignment_single_eval(model, prompt, label, true_tokens, false_tokens)
         total_metric += correct
@@ -358,3 +354,9 @@ def probs_mass_eval(baseline_probs: t.Tensor,
         return t.sum(baseline_probs * (t.log(baseline_probs) - t.log(eval_probs)), dim=-1).mean()
     elif metric == 'cosine':
         return t.nn.functional.cosine_similarity(baseline_probs, eval_probs, dim=-1).mean()
+    
+def get_strength(k, alpha, model, attn=True):
+    if attn:
+        return np.abs(k*alpha/(model.cfg.n_heads*model.cfg.n_layers))
+    else:
+        return np.abs(k*alpha/model.cfg.n_layers)

@@ -455,3 +455,21 @@ def stratified_sample(df, stratify_col, cutoff, random_state=None):
         samples.append(group_df.sample(n=n, random_state=random_state))
 
     return pd.concat(samples).reset_index(drop=True)
+
+def extract(model, data, labels, device, batch_size, attn, half=True):
+    model.to(device)
+    model.reset_hooks()
+    extractor = ActivationExtractor(model=model, data=data, labels=labels, device=device, half=half,
+                                      batch_size=batch_size)
+    if attn:
+        extractor.set_hooks([i for i in range(model.cfg.n_layers)],
+                            [tlens.utils.get_act_name('z')], attn=True)
+    else:
+        extractor.set_hooks(
+                            [i for i in range(model.cfg.n_layers)],
+                            [tlens.utils.get_act_name('resid_post')], attn=False) # for instance
+    activations, labels = extractor.process() # Get
+    model.to(t.device('cpu'))
+    gc.collect()
+    t.cuda.empty_cache()
+    return activations, labels
