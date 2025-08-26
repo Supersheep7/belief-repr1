@@ -11,7 +11,6 @@ from tqdm import tqdm
 import einops
 from sklearn.linear_model import LogisticRegression
 import matplotlib.pyplot as plt
-
 device = t.device("cuda" if t.cuda.is_available() else "cpu")
 '''
 Here we have the three probes that we will deploy to test for internal representation of belief

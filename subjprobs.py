@@ -1,8 +1,6 @@
 import torch as t
 import tqdm.auto as tqdm
 from tqdm import tqdm
-import transformer_lens as tlens
-import transformer_lens.utils as utils
 from transformer_lens.hook_points import (
     HookPoint,
 )
@@ -11,36 +9,25 @@ from transformer_lens import HookedTransformer
 from jaxtyping import Float, Int
 from typing import List, Tuple, Dict
 import numpy as np
-import functools
 from intervention import generate
 import re
-from sklearn.linear_model import LogisticRegression
 import torch as t
 import torch.nn as nn
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 import openai
-
-
 device = t.device("cuda" if t.cuda.is_available() else "cpu")
 
-def circular_mean(thetas, performances):
+''' Coherence Study '''
 
-    thetas = np.array(thetas)
-    performances = np.array(performances)
-    sum_weights = np.sum(performances)
-    x = np.sum(np.sqrt(performances) * np.cos(thetas)) / sum_weights
-    y = np.sum(np.sqrt(performances) * np.sin(thetas)) / sum_weights
-    theta = np.arctan2(y, x)
-
-    return theta
 
 class FixedLinear(nn.Module):
+
+    ''' Linear probe with a fixed theta '''
+
     def __init__(self, weight, bias=None):
         super(FixedLinear, self).__init__()
         self.weight = nn.Parameter(weight, requires_grad=False)
@@ -56,6 +43,8 @@ class FixedLinear(nn.Module):
             return t.matmul(x, self.weight.T)
 
 class LinearProbe():
+
+    ''' Linear probe trained through BCE & AdamW. For random init '''
 
     def __init__(self, X_train, y_train, X_val, y_val,
                  input_dim: int, output_dim: int = 1,
@@ -97,9 +86,6 @@ class LinearProbe():
         return t.nn.functional.binary_cross_entropy(p, labels)
 
     def get_direction(self):
-        """
-        Returns the direction of the probe in the input space.
-        """
         with t.no_grad():
             direction = self.best_probe[0].weight.squeeze(0)
             return direction.cpu().numpy()
@@ -110,10 +96,9 @@ class LinearProbe():
         epoch_losses = []
         accuracies = []
 
-        patience = self.patience  # You can expose this as a class param if desired
+        patience = self.patience  # Early stopping
         epochs_no_improve = 0
 
-        # Start training
         for epoch in tqdm(range(self.nepochs), desc='Epochs'):
             epoch_loss = 0.0
 
@@ -125,7 +110,7 @@ class LinearProbe():
                 optimizer.step()
                 epoch_loss += loss.item()
 
-            epoch_losses.append(epoch_loss)  # Track epoch loss for plotting
+            epoch_losses.append(epoch_loss)  
             self.probe.eval()
 
             # Early stopping check
@@ -350,7 +335,7 @@ def form_master_probe(probe_config, X_train, y_train, X_test, y_test, n=100, cir
           pc0 = my_pca.fit(directions).components_[0]
           avg_direction = t.tensor(pc0, dtype=t.float32, device=device)
         else:
-          avg_direction = circular_mean(thetas=directions, performances=performances) if circular else np.average(directions, weights=performances, axis=0)
+          avg_direction = np.average(directions, weights=performances, axis=0)
           avg_direction = t.tensor(avg_direction, dtype=t.float32, device=device)
 
         return nn.Sequential(
@@ -387,7 +372,15 @@ class JudgeCoherence():
         '''
         proba1 = t.tensor(proba1)
         proba2 = t.tensor(proba2)
-        return t.mean((proba1 - proba2) ** 2)
+        return 1/(1+t.mean((proba1 - proba2) ** 2))
+
+    def mae_metric_clamp(self, proba1: t.Tensor, proba2: t.Tensor) -> Float:
+        ''' 
+        Standard for neg logic.
+        '''
+        proba1 = t.tensor(proba1)
+        proba2 = t.tensor(proba2)
+        return 1/(1+t.abs(t.mean((proba1 - proba2))))
 
     def aggregate_euclidean_metric(self, proba1: t.Tensor, proba2: t.Tensor) -> Float:
 
@@ -425,7 +418,7 @@ class JudgeCoherence():
         # Conj case: proba[0] > proba[1]
         # Dataset case: mean(proba[0]) < mean(proba[1]) where proba[0] is the target dataset and proba[1] is the source dataset
         elif self.logic == 'ent':
-            return self.metric(proba[0]*proba[1], proba[2])     
+            return self.metric(proba[0], proba[1]/proba[2])     
         # TRUE case: proba[0] == P(phi); proba[1] == P(phi -> psi); proba[2] == P(psi)
         # FALSE case: proba[0] == P(psi); proba[1] == P(phi -> psi); proba[2] == P(psi)
 
@@ -434,6 +427,9 @@ def to_confidence(probs):
     pointfives = t.full_like(probs, 0.5, device=device)
     probs = t.abs(probs - pointfives) * 2
     return probs 
+
+''' Self-Consistency Study '''
+
 
 def bin_proba(probs):
     '''
