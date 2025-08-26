@@ -21,7 +21,7 @@ from tqdm import tqdm
 from datasets import Dataset
 from transformers import TrainingArguments, Trainer, EarlyStoppingCallback
 import pandas as pd
-
+import gc
 
 def decompose_mha(mha_batch: Float[t.Tensor, "n_batch batch_size n_head d_head"]
                   ) -> List[Float[t.Tensor, "n_batch batch_size d_head"]]:
