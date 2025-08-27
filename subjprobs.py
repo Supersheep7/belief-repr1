@@ -359,6 +359,13 @@ class JudgeCoherence():
 
         self.logic = logic
 
+    
+    def to_confidence(probs):
+        probs = t.tensor(probs, dtype=t.float32, device=device)
+        pointfives = t.full_like(probs, 0.5, device=device)
+        probs = t.abs(probs - pointfives) * 2
+        return probs 
+
     def cosine_metric(self, proba1: t.Tensor, proba2: t.Tensor) -> Float:
 
         proba1 = t.tensor(proba1)
@@ -379,13 +386,19 @@ class JudgeCoherence():
         proba2 = t.tensor(proba2)
         return 1/(1+t.mean((proba1 - proba2) ** 2))
 
-    def mae_metric_clamp(self, proba1: t.Tensor, proba2: t.Tensor) -> Float:
+    def mae_metric_clamp(self, proba1: t.Tensor, proba2: t.Tensor, proba3: t.Tensor, easy=False) -> Float:
         ''' 
-        Standard for neg logic.
+        Standard for impl logic.
         '''
-        proba1 = t.tensor(proba1)
-        proba2 = t.tensor(proba2)
-        return 1/(1+t.abs(t.mean((proba1 - proba2))))
+        proba1 = t.tensor(proba1).clip(lower=0.01)                                  # P(psi and phi)
+        proba2 = t.tensor(proba1).clip(lower=0.01)                                  # P(psi)
+        y =  t.ones_like(proba3) if easy else t.tensor(proba3).clip(lower=0.01)     # P(phi|psi)            
+        y_hat = proba1/proba2
+        mask = y_hat < 2
+        filtered_y_hat = y_hat[mask]
+        filtered_y = y[mask]
+
+        return 1/(1+t.abs(t.mean((filtered_y_hat - filtered_y))))
 
     def aggregate_euclidean_metric(self, proba1: t.Tensor, proba2: t.Tensor) -> Float:
 
@@ -395,7 +408,7 @@ class JudgeCoherence():
     
     def less_than_perc(self, proba1: t.Tensor, proba2: t.Tensor) -> Float:
         '''
-        Standard for conj/neg/ent/ent* logic.
+        Standard for conj/disj logic.
         '''
         proba1 = t.tensor(proba1)
         proba2 = t.tensor(proba2)
@@ -405,8 +418,8 @@ class JudgeCoherence():
         '''
         Standard for cross-dataset logic.
         '''
-        proba1 = t.tensor(proba1)
-        proba2 = t.tensor(proba2)
+        proba1 = self.to_confidence(t.tensor(proba1))
+        proba2 = self.to_confidence(t.tensor(proba2))
         return (proba1 - proba2).abs().mean().item()
 
     def set_metric(self, metric: callable):
@@ -417,24 +430,19 @@ class JudgeCoherence():
 
         if self.logic == 'neg':
             return self.metric(proba[0] + proba[1], t.ones_like(proba[0]))
-        elif self.logic in ['disj', 'conj', 'datasets', 'ent*']:
+        elif self.logic in ['disj', 'conj', 'datasets']:
             return self.metric(proba[0], proba[1])
         # Disj case: proba[0] < proba[1]
         # Conj case: proba[0] > proba[1]
         # Dataset case: mean(proba[0]) < mean(proba[1]) where proba[0] is the target dataset and proba[1] is the source dataset
         elif self.logic == 'ent':
-            return self.metric(proba[0], proba[1]/proba[2])     
+            return self.metric(proba[0], proba[1], proba[2])     
+        elif self.logic == 'ent*':
+            return self.metric(proba[0], proba[1], proba[2], easy=True)     
         # TRUE case: proba[0] == P(phi); proba[1] == P(phi -> psi); proba[2] == P(psi)
         # FALSE case: proba[0] == P(psi); proba[1] == P(phi -> psi); proba[2] == P(psi)
 
-def to_confidence(probs):
-    probs = t.tensor(probs, dtype=t.float32, device=device)
-    pointfives = t.full_like(probs, 0.5, device=device)
-    probs = t.abs(probs - pointfives) * 2
-    return probs 
-
 ''' Self-Consistency Study '''
-
 
 def bin_proba(probs):
     '''
@@ -450,7 +458,7 @@ def check_calibration(probs, labels):
     probs = t.tensor(probs, dtype=t.float32, device=device)
 
 def compute_ece(probs, labels, n_bins=10):
-    """Compute Expected Calibration Error (ECE)"""
+    """Compute Expected Consistency Error (ECE)"""
     probs = np.array(probs)
     labels = np.array(labels)
     bin_edges = np.linspace(0, 1, n_bins + 1)
