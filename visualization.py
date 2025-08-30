@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 from scipy.stats import gaussian_kde
 from matplotlib import colors 
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
 
 def mass_plot(labels, heads=None, streams=None, color_map={0:'red', 1:'blue'}, resid={0: 'pre', 1: 'mid', 2: 'post'}):
 
@@ -501,3 +503,68 @@ def plot_histogram(
     plt.legend()
     plt.tight_layout()
     plt.show()
+
+def compute_ece_mce(bin_stats):
+    bin_weights = bin_stats['count'] / bin_stats['count'].sum()
+    gaps = (bin_stats['accuracy'] - bin_stats['avg_conf']).abs()
+
+    ece = (bin_weights * gaps).sum()
+    mce = gaps.max()
+
+    return ece, mce
+
+def plot_reliability_diagram(bin_stats, bin_edges, ax, title, cmap='Blues'):
+    # Calculate bin widths and midpoints
+    bin_widths = np.diff(bin_edges)
+    bin_centers = bin_edges[:-1] + bin_widths / 2
+
+    # Compute bin error magnitude
+    errors = np.abs(bin_stats['accuracy'] - bin_stats['avg_conf'])
+
+    # Normalize errors for colormap scaling
+    norm = mcolors.Normalize(vmin=0, vmax=0.3)
+    color_map = cm.get_cmap(cmap)
+
+    # Plot perfect calibration line
+    ax.plot([0, 1], [0, 1], linestyle='--', color='gray', linewidth=1)
+
+    # Bar colors based on calibration error
+    bar_colors = color_map(norm(errors.values))
+
+    # Plot dynamic-width bars
+    ax.bar(
+        bin_centers,
+        bin_stats['accuracy'],
+        width=bin_widths,
+        align='center',
+        alpha=0.9,
+        edgecolor='black',
+        color=bar_colors,
+        linewidth=1
+    )
+
+    # Axis and title
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel('Subjective Probability P(True)', fontsize=12)
+    ax.set_ylabel('% True Answers', fontsize=12)
+    ax.set_title(title, fontsize=14)
+
+    # Grid
+    ax.grid(True, linestyle=':', linewidth=0.6, alpha=0.6)
+
+    # ECE and MCE annotations
+    ece, mce = compute_ece_mce(bin_stats)
+
+    ax.text(
+        0.05, 0.9,
+        f"ECE = {ece:.3f}\nMCE = {mce:.3f}",
+        fontsize=11,
+        bbox=dict(facecolor='white', edgecolor='gray', boxstyle='round,pad=0.3', alpha=0.8)
+    )
+
+    # Optional: add colorbar legend for calibration error
+    sm = cm.ScalarMappable(cmap=color_map, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax, pad=0.02)
+    cbar.set_label('Calibration Error', fontsize=10)

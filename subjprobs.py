@@ -244,8 +244,8 @@ class LinearProbe():
 
             return acc
 
-def self_evaluate_row(prompt, model):
-    truth, conf = self_reporting_confidence(model, prompt)
+def self_evaluate_row(prompt, model, context, shots):
+    truth, conf = self_reporting_confidence(model, prompt, context=context, shots=shots)
     return pd.Series({'truth': truth, 'confidence': conf})
 
 def self_reporting_confidence(model: HookedTransformer,
@@ -286,14 +286,17 @@ def self_reporting_confidence(model: HookedTransformer,
         gc.collect()
         t.cuda.empty_cache()
 
-
+def logit_evaluate_row(prompt, model, context, shots):
+    with t.no_grad():
+        truth, conf = logit_confidence(model, prompt, context=context, shots=shots)
+    return pd.Series({'truth': truth, 'confidence': conf})
 
 def logit_confidence(model: HookedTransformer,
                     prompt: str,
                     context: str,
                     shots: List[str],
                     device: str = "cuda") -> Float:
-    with t.amp.autocast('cuda'):
+    with t.amp.autocast(device_type='cuda'):
       #Ġ
       #▁
       true_token_ids = [model.tokenizer.convert_tokens_to_ids(token) for token in ['true', 'True', 'TRUE', 'Ġtrue', 'ĠTrue', 'ĠTRUE']]
@@ -316,11 +319,10 @@ def logit_confidence(model: HookedTransformer,
           normalized_p_true = 0.5
     return truth_value, normalized_p_true
 
-def logit_evaluate_row(prompt):
+def logit_evaluate_row(prompt, model, shots):
     with t.no_grad():
         truth, conf = logit_confidence(model, prompt, context='', shots=shots)
     return pd.Series({'truth': truth, 'confidence': conf})
-
 
 # On latent representations
 
@@ -523,35 +525,48 @@ class JudgeCoherence():
 
 ''' Self-Consistency Study '''
 
-def bin_proba(probs):
-    '''
-    bins tensor in 10 different bins
-    '''
-    probs = t.tensor(probs, dtype=t.float32, device=device)
-    bins = t.linspace(0, 1, steps=11, device=device)
-    binned_probs = t.bucketize(probs, bins) - 1  # -1 to make it zero-indexed
-    return binned_probs
+def calibration_curve(confidences, corrects, n_bins=10, quantile_binning=True):
+    # Compute adjusted accuracy per prediction:
+    # If the prediction was correct, use its confidence.
+    # If incorrect, use 1 - confidence (reflects how wrong it was).
+    # adjusted_acc = corrects.astype(float)
+    # adjusted_acc = np.where(corrects == 1, confidences, 1-confidences)
 
-def check_calibration(probs, labels):
+    df = pd.DataFrame({'conf': confidences, 'adjusted_acc': corrects.astype(int)})
 
-    probs = t.tensor(probs, dtype=t.float32, device=device)
+    # Bin the data: either using quantile binning or uniform binning
+    if quantile_binning:
+        # Quantile binning: same number of samples per bin (as much as possible)
+        # pd.qcut returns bin labels and bin edges
+        bins = pd.qcut(df['conf'], q=n_bins, retbins=True, duplicates='drop')
+        df['bin'] = bins[0].cat.codes       
+        bin_edges = bins[1]                 
+    else:
+        # Uniform binning: divide [0,1] into equal-width intervals
+        bin_edges = np.linspace(0, 1, n_bins + 1)
+        df['bin'] = pd.cut(df['conf'], bins=bin_edges, labels=False, include_lowest=True)
 
-def compute_ece(probs, labels, n_bins=10):
-    """Compute Expected Consistency Error (ECE)"""
-    probs = np.array(probs)
-    labels = np.array(labels)
-    bin_edges = np.linspace(0, 1, n_bins + 1)
-    ece = 0.0
-    total = len(probs)
+    bin_stats = df.groupby('bin').agg(
+        avg_conf=('conf', 'mean'),
+        accuracy=('adjusted_acc', 'mean'),
+        count=('conf', 'count')
+    ).reset_index()
 
-    for i in range(n_bins):
-        bin_lower, bin_upper = bin_edges[i], bin_edges[i+1]
-        in_bin = (probs > bin_lower) & (probs <= bin_upper)
-        bin_size = np.sum(in_bin)
-        if bin_size > 0:
-            bin_probs = probs[in_bin]
-            bin_labels = labels[in_bin]
-            avg_conf = np.mean(bin_probs)
-            avg_acc = np.mean(bin_labels)
-            ece += (bin_size / total) * np.abs(avg_conf - avg_acc)
+    return bin_stats, bin_edges
+
+def compute_ece(bin_stats):
+    total = bin_stats['count'].sum()
+    ece = ((bin_stats['count'] / total) * np.abs(bin_stats['avg_conf'] - bin_stats['accuracy'])).sum()
     return ece
+
+def compute_mce(y_true, y_prob, bins):
+    bin_indices = np.digitize(y_prob, bins) - 1
+    mce = 0
+    for i in range(len(bins) - 1):
+        in_bin = bin_indices == i
+        if np.any(in_bin):
+            acc = np.mean(y_true[in_bin])
+            conf = np.mean(y_prob[in_bin])
+            gap = abs(acc - conf)
+            mce = max(mce, gap)
+    return mce
