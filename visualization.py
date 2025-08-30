@@ -452,3 +452,52 @@ def nice_boxplot(
 
     plt.tight_layout()
     plt.show()
+
+def plot_histogram(
+    data,
+    bins=30,
+    title="Credence distribution",
+    xlabel="Value",
+    ylabel="Frequency",
+    figsize=(10, 6),
+    grid=True,
+    color=None,
+    edgecolor='black',
+    alpha=0.7,
+    density=False,
+    show_mean=True,
+    show_median=True,
+):
+    plt.figure(figsize=figsize)
+
+    color = color or plt.cm.viridis(0.6)
+
+    # Histogram
+    counts, bins_edges, patches = plt.hist(
+        data,
+        bins=bins,
+        color=color,
+        edgecolor=edgecolor,
+        alpha=alpha,
+        density=density
+    )
+
+    # Optional lines
+    if show_mean:
+        mean_val = np.mean(data)
+        plt.axvline(mean_val, color='red', linestyle='--', label=f'Mean: {mean_val:.2f}')
+    if show_median:
+        median_val = np.median(data)
+        plt.axvline(median_val, color='orange', linestyle='-', label=f'Median: {median_val:.2f}')
+
+    # Labels and title
+    plt.title(title, fontsize=16)
+    plt.xlabel(xlabel, fontsize=14)
+    plt.ylabel(ylabel, fontsize=14)
+
+    if grid:
+        plt.grid(visible=True, linestyle='--', alpha=0.5)
+
+    plt.legend()
+    plt.tight_layout()
+    plt.show()

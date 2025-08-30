@@ -411,6 +411,21 @@ def get_top_heads(accuracies, n=5):
 
     return top_heads, top_values
 
+def stratified_fixed_sample(df, stratify_col, n, random_state=42):
+    proportions = df[stratify_col].value_counts(normalize=True)
+    per_class_n = (proportions * n).round().astype(int)
+    diff = n - per_class_n.sum()
+    if diff != 0:
+        fractional = (proportions * n) - (proportions * n).round()
+        adjust_classes = fractional.abs().sort_values(ascending=False).index
+        for i in range(abs(diff)):
+            per_class_n[adjust_classes[i % len(adjust_classes)]] += int(diff / abs(diff))
+    sampled = []
+    for label, count in per_class_n.items():
+        sampled.append(df[df[stratify_col] == label].sample(n=count, random_state=random_state))
+
+    return pd.concat(sampled)
+
 def stratified_sample(df, stratify_col, cutoff, random_state=None):
     '''
     For dataset reduction: given a dataframe, a column to stratify on, and a cutoff number of samples

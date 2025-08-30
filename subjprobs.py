@@ -19,9 +19,72 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 import openai
+import pandas as pd 
+import gc 
+from sklearn.model_selection import train_test_split
 device = t.device("cuda" if t.cuda.is_available() else "cpu")
 
 ''' Coherence Study '''
+
+def stratified_fixed_sample(df, stratify_col, n, random_state=42):
+    
+    proportions = df[stratify_col].value_counts(normalize=True)
+
+    per_class_n = (proportions * n).round().astype(int)
+
+    diff = n - per_class_n.sum()
+    if diff != 0:
+        fractional = (proportions * n) - (proportions * n).round()
+        adjust_classes = fractional.abs().sort_values(ascending=False).index
+        for i in range(abs(diff)):
+            per_class_n[adjust_classes[i % len(adjust_classes)]] += int(diff / abs(diff))
+
+    sampled = []
+    for label, count in per_class_n.items():
+        sampled.append(df[df[stratify_col] == label].sample(n=count, random_state=random_state))
+
+    return pd.concat(sampled)
+
+
+def get_data_split(task: str, curated_dataset, probe_config, other_dataset=None, cutoff=1500):
+
+    ''' 
+    Provides a train/test split for the different datasets and tasks.
+    Crucially, the test split is already provided in the different versions;
+    Outputs: 
+            train, labels, dataframe
+    '''
+
+    if task == 'cross':
+        train_set, test_set_0 = train_test_split(curated_dataset, test_size=0.2, random_state=42, stratify=curated_dataset['filename'])
+        test_df = (test_set_0.dropna(), other_dataset.dropna())
+    elif task == 'cross_mulan':
+        train_set, _ = train_test_split(curated_dataset, test_size=0.2, random_state=42, stratify=curated_dataset['filename'])
+        mutable = other_dataset[other_dataset['type'] == 'mutable']
+        immutable = other_dataset[other_dataset['type'] == 'immutable']
+        test_df = (mutable.dropna(), immutable.dropna())
+    elif task in ['negation', 'disjunction', 'conjunction']:
+        # In this case curated dataset is the logical dataset + the remainder
+        remainder = curated_dataset[~curated_dataset['filename'].isin(['common_claim_true_false.csv', 'companies_true_false.csv', 'counterfact_true_false.csv'])]
+        curated_dataset = pd.concat([remainder, other_dataset])
+        train_set, test_set = train_test_split(curated_dataset, test_size=0.2, random_state=42, stratify=curated_dataset['filename'])
+        test_df = (test_set.dropna(), test_set.dropna())
+        
+    elif task == 'inference':
+        remainder = curated_dataset[~curated_dataset['filename'].isin(['common_claim_true_false.csv', 'companies_true_false.csv', 'counterfact_true_false.csv',
+                                                                      'cities.csv', 'cities_cities_conj.csv', 'cities_cities_disj.csv', 'neg_cities.csv'
+                                                                      ])]
+        curated_dataset = pd.concat([remainder, other_dataset])
+        train_set, test_set = train_test_split(curated_dataset, test_size=0.2, random_state=42, stratify=curated_dataset['filename'])
+        test_df = (test_set.dropna(), test_set.dropna())
+        
+
+    # Trim for batch size
+    train_set = train_set.iloc[:-(len(train_set) % probe_config.batch_size_extractor), :]
+    X_clean_train = list(train_set['statement'])
+    y_clean_train = list(train_set['label'])
+    
+    return (X_clean_train, y_clean_train, test_df)
 
 
 class FixedLinear(nn.Module):
@@ -181,48 +244,58 @@ class LinearProbe():
 
             return acc
 
+def self_evaluate_row(prompt, model):
+    truth, conf = self_reporting_confidence(model, prompt)
+    return pd.Series({'truth': truth, 'confidence': conf})
+
 def self_reporting_confidence(model: HookedTransformer,
                               prompt: str,
-                              context: str = 'You are a helpful assistant.\n You will receive a statement. You will be asked whether the answer is correct. Answer very carefully whether is True or False, and then provide a confidence score between 0 and 1. Don\'t be overconfident! I will provide three examples.\n',
-                              shots: List[str] = ['Paris is the capital of France. This statement is: True. Confidence: 0.95',
-                                                  'The largest bear in the world is currently in Italy. This statement is: False. Confidence: 0.70',
-                                                  'Milan is the capital of Italy. This statement is: False. Confidence: 0.85'],
+                              context: str,
+                              shots: List[str],
                               device: str = "cuda") -> Float:
     """
     Computes the self-reporting probabilities for a batch of tokens using a pre-trained model.
+    Cleans up CUDA memory after use to prevent OOM when called repeatedly.
     """
 
-    with t.autocast('cuda'):
-      context = context
-      shots = '\n'.join(shots)
-      full_prompt = context + shots + '\n' + prompt
-      answer = generate(model=model, prompt=full_prompt, temperature=0, max_length=10)
-      match = re.search(r'\d+\.\d+', answer)
-      if match:
-          truth_value = answer.split()[0]
-          confidence = float(match.group())
-      else:
-          print(f"Warning: No confidence score found in the answer: {answer}")
-          confidence = 0.5
-          truth_value = 0.5
-    confidence = max(confidence, 1-confidence)  # Ensure the model is not reporting inverse confidence
+    try:
+        context = context + '\n'
+        shots = '\n'.join(shots)
+        full_prompt = context + shots + '\n' + f'{prompt}\nAnswer:'
 
-    if re.fullmatch(r'(Ġ)?(False|false|FALSE)(\.)?', truth_value):
-        confidence = 1 - confidence # If the model says False, we invert the confidence to reflect the belief in the truth of the statement.
+        with t.no_grad(), t.autocast(device):
+            answer = generate(model=model, prompt=full_prompt, temperature=0, max_length=10)
+        match = re.search(r'\d+\.\d+', answer)
+        if match:
+            truth_value = answer.split()[0]
+            confidence = float(match.group())
+        else:
+            print(f"Warning: No confidence score found in the answer: {answer}")
+            truth_value = "Unknown"
+            confidence = float('nan')
 
-    return truth_value, confidence
+        confidence = max(confidence, 1 - confidence)
+
+        if re.fullmatch(r'(Ġ)?(False|false|FALSE)(\.)?', str(truth_value)):
+            confidence = 1 - confidence
+
+        return truth_value, confidence
+
+    finally:
+        # Force cleanup of unused memory
+        gc.collect()
+        t.cuda.empty_cache()
+
+
 
 def logit_confidence(model: HookedTransformer,
                     prompt: str,
-                    context: str = '',
-                    shots: List[str] = '',
+                    context: str,
+                    shots: List[str],
                     device: str = "cuda") -> Float:
-    
-    """
-    Computes the logit-based probabilities for a batch of tokens using a pre-trained model.
-    """
-
     with t.amp.autocast('cuda'):
+      #Ġ
+      #▁
       true_token_ids = [model.tokenizer.convert_tokens_to_ids(token) for token in ['true', 'True', 'TRUE', 'Ġtrue', 'ĠTrue', 'ĠTRUE']]
       false_token_ids = [model.tokenizer.convert_tokens_to_ids(token) for token in ['false', 'False', 'FALSE', 'Ġfalse', 'ĠFalse', 'ĠFALSE']]
       full_prompt = context + '\n'.join(shots) + '\n' + f'{prompt}\nAnswer:'
@@ -242,6 +315,12 @@ def logit_confidence(model: HookedTransformer,
           print("Warning: model underconfident")
           normalized_p_true = 0.5
     return truth_value, normalized_p_true
+
+def logit_evaluate_row(prompt):
+    with t.no_grad():
+        truth, conf = logit_confidence(model, prompt, context='', shots=shots)
+    return pd.Series({'truth': truth, 'confidence': conf})
+
 
 # On latent representations
 
