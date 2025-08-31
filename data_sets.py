@@ -4,13 +4,13 @@ import os
 from tqdm import tqdm
 import numpy as np
 
-file_path = "/content/drive/My Drive/Thesis/belief-repr-1/"
+file_path = "/content/drive/My Drive/Finding_ES_LLM/"
 
 ''' True-false (Azariaa & Mitchell 2023) '''
 
 class TrueFalseBuilder():
   def __init__(self):
-    self.path = f'/content/drive/My Drive/Thesis/belief-repr-1/datasets/true-false'
+    self.path = f'{file_path}datasets_diy/true-false'
 
   def get_dataset(self):
     dfs = []
@@ -29,7 +29,7 @@ class TrueFalseBuilder():
 
 class TruthfulQABuilder():
   def __init__(self):
-    self.path = f'/content/drive/My Drive/Thesis/belief-repr-1/datasets/truthfulqa/TruthfulQA.csv'
+    self.path = f'{file_path}datasets_diy/truthfulqa/TruthfulQA.csv'
 
   def get_dataset(self):
     return pd.read_csv(self.path)
@@ -64,7 +64,7 @@ class MuLanBuilder():
 
 class TrueFalseEasyBuilder():
   def __init__(self, clean=True):
-    self.path = f'/content/drive/My Drive/Thesis/belief-repr-1/datasets/true-false-easy'
+    self.path = f'{file_path}datasets_diy/true-false-easy'
     self.clean = clean
 
   def get_dataset(self):
