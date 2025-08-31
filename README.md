@@ -1,6 +1,6 @@
 # Finding Epistemic Success in LLMs
 
-Welcome! This project explores **epistemic success** measures in LLMs through a mix of interpretability studies and it is meant to go hand in hand with my MSc Thesis Project so titled. No local installation is required—just follow the Colab links below to get started.
+Welcome! This project explores **epistemic success** measures in LLMs through a mix of interpretability studies and it is meant to go hand in hand with my MSc Thesis Project so titled, presented at DIKU, Copenhagen University under the supervision of Anders Søgaard. No local installation is required—just follow the Colab links below to get started. 
 
 ## Note on Usage
 
@@ -37,5 +37,6 @@ Welcome! This project explores **epistemic success** measures in LLMs through a 
 Most users only need the notebooks. The code in `src/` is modularized to keep the notebooks clean and is commented for those interested in the details.
 
 ## License
+
 
 MIT License. See [LICENSE](LICENSE) for details.
