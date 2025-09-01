@@ -17,8 +17,8 @@ Welcome! This project explores **epistemic success** measures in LLMs through a 
 ## Colab Notebooks
 
 1. [Notebook 1: Experiments for Chapter _Finding Directions of Truth_](https://colab.research.google.com/drive/1i6Gk33jBEMIkJnGuEshpOb8n38EEh3-2)
-2. [Notebook 2: Experiments for Chapter _Coherence in LLMs as an Epistemic Success_](https://colab.research.google.com/drive/1i6Gk33jBEMIkJnGuEshpOb8n38EEh3-2)
-3. [Notebook 3: Various visualizations/analyses on collected results](https://colab.research.google.com/drive/1i6Gk33jBEMIkJnGuEshpOb8n38EEh3-2)
+2. [Notebook 2: Experiments for Chapter _Coherence in LLMs as an Epistemic Success_](https://colab.research.google.com/drive/1eHtzDxyIPsIxZNiPO4G_RlEPNh-oNIWZ)
+3. [Notebook 3: Various visualizations/analyses on collected results](https://colab.research.google.com/drive/1cHY3zsITuMndBeLVB_b_nPWrNaJkcjIf)
 
 ## Codebase Structure
 
@@ -40,3 +40,4 @@ Most users only need the notebooks. The code in `src/` is modularized to keep th
 
 
 MIT License. See [LICENSE](LICENSE) for details.
+
